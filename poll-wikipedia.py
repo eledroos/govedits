@@ -167,6 +167,7 @@ def poll_recent_changes_for_duration(duration_minutes=30, max_changes=1000):
     while datetime.now() < end_time and total_changes < max_changes:
         try:
             changes = fetch_recent_changes().get("query", {}).get("recentchanges", [])
+            
             anonymous_changes = [
                 change for change in changes
                 if is_ip_address(change.get("user", "")) and change.get("rcid") not in processed_changes
@@ -187,22 +188,22 @@ def poll_recent_changes_for_duration(duration_minutes=30, max_changes=1000):
                 for change in anonymous_changes:
                     processed_changes.add(change.get("rcid"))
                 
-                # Update the last timestamp from the most recent change
-                if changes:  # Use the most recent change, not just anonymous ones
-                    last_timestamp = changes[0]["timestamp"]
-                    save_state(last_timestamp)
+                # Update timestamp from the last anonymous change we processed
+                last_timestamp = anonymous_changes[-1]["timestamp"]
+                save_state(last_timestamp)
+                print(f"Updated timestamp to: {last_timestamp}")
                 
                 total_changes += len(anonymous_changes)
                 print(f"Total anonymous changes logged: {total_changes}")
             else:
-                print("No new anonymous changes found in this poll.", end='\r')
+                print("\nPolling for changes...", end='\r')
                 
         except Exception as e:
             print(f"Error during polling: {e}")
         
         time.sleep(10)  # Adjust this interval if needed
     
-    print("Polling session completed.")
+    print("\nPolling session completed.")
     print(f"Total unique anonymous changes logged: {total_changes}")
 
 if __name__ == "__main__":
