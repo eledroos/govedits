@@ -164,3 +164,4 @@ anonymous_changes.csv
 .DS_Store
 *.csv
 *.zip
+*.json

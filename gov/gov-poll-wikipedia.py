@@ -10,6 +10,8 @@ from playwright.sync_api import sync_playwright
 import asyncio
 import ipaddress
 from typing import Dict, Set, Union
+import logging
+from typing import List, Tuple
 
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_DIFF_BASE_URL = "https://en.wikipedia.org/w/index.php"
@@ -17,13 +19,55 @@ STATE_FILE = "last_run_state.json"
 SCREENSHOTS_DIR = "diff_screenshots"
 # GOV_IPS_FILE = "govedits - IP Address DB.csv" # old file
 GOV_IPS_FILE = "govedits - db.csv" # new file
+LOG_FILE = "wikipedia_monitor.log"
+SENSITIVE_CHANGES_CSV = "sensitive_content_changes.csv"
+
+
+# Content Detection Patterns
+PHONE_PATTERNS = [
+    r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',  # US/Canada: 123-456-7890
+    r'\b\(\d{3}\)\s*\d{3}[-.]?\d{4}\b'  # (123) 456-7890
+]
+ADDRESS_PATTERNS = [
+    r'\b\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr)\b',
+    r'\b(?:PO|P\.O\.) Box\s+\d+\b'
+]
+
+def setup_logging():
+    logging.basicConfig(
+        filename=LOG_FILE,
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    # Also print to console
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    logging.getLogger('').addHandler(console)
+
+def detect_sensitive_content(text: str) -> Tuple[bool, List[str]]:
+    found_patterns = []
+    
+    # Check for phone numbers
+    for pattern in PHONE_PATTERNS:
+        if re.search(pattern, text):
+            found_patterns.append("phone_number")
+            break
+            
+    # Check for addresses
+    for pattern in ADDRESS_PATTERNS:
+        if re.search(pattern, text):
+            found_patterns.append("address")
+            break
+            
+    return bool(found_patterns), found_patterns
 
 params = {
     "action": "query",
     "list": "recentchanges",
     "rcprop": "title|ids|sizes|flags|user|timestamp|comment|revid|parentid",
     "rcshow": "!bot",
-    "rclimit": 50,
+    "rclimit": 500,
     "format": "json",
 }
 
@@ -198,16 +242,30 @@ def take_screenshot(diff_url, title, timestamp):
 
 def save_to_csv(changes, ip_cache):
     file_exists = os.path.isfile(output_csv)
-    with open(output_csv, mode="a", newline="", encoding="utf-8") as file:
+    sensitive_exists = os.path.isfile(SENSITIVE_CHANGES_CSV)
+
+    with open(output_csv, mode="a", newline="", encoding="utf-8") as file, \
+         open(SENSITIVE_CHANGES_CSV, mode="a", newline="", encoding="utf-8") as sensitive_file:
         writer = csv.writer(file)
+        sensitive_writer = csv.writer(sensitive_file)
+
         if not file_exists:
             writer.writerow([
                 "Title", "IP Address", "Government Organization", "Timestamp", 
                 "Edit ID", "Old Size", "New Size", "Revision ID", "Parent ID", 
-                "Diff URL", "Comment", "Screenshot Path"
+                "Diff URL", "Comment", "Screenshot Path", "Contains Sensitive Info"
+            ])
+
+        if not sensitive_exists:
+            sensitive_writer.writerow([
+                "Title", "IP Address", "Government Organization", "Timestamp", 
+                "Edit ID", "Diff URL", "Comment", "Sensitive Content Types"
             ])
 
         for change in changes:
+            comment = change.get("comment", "")
+            is_sensitive, content_types = detect_sensitive_content(comment)
+            
             diff_url = create_diff_url(change.get("revid"), change.get("parentid"))
             screenshot_path = take_screenshot(
                 diff_url, 
@@ -217,6 +275,7 @@ def save_to_csv(changes, ip_cache):
             
             _, org = ip_cache.check_ip(change.get("user"))
             
+            # Save to main CSV
             writer.writerow([
                 change.get("title"),
                 change.get("user"),
@@ -228,9 +287,25 @@ def save_to_csv(changes, ip_cache):
                 change.get("revid"),
                 change.get("parentid"),
                 diff_url,
-                change.get("comment", ""),
-                screenshot_path
+                comment,
+                screenshot_path,
+                "Yes" if is_sensitive else "No"
             ])
+
+            # If sensitive, save to separate CSV
+            if is_sensitive:
+                sensitive_writer.writerow([
+                    change.get("title"),
+                    change.get("user"),
+                    org,
+                    convert_timestamp(change.get("timestamp")),
+                    change.get("rcid"),
+                    diff_url,
+                    comment,
+                    ", ".join(content_types)
+                ])
+                logging.warning(f"Sensitive content detected in edit by {change.get('user')} "
+                              f"({org}) to {change.get('title')}: {', '.join(content_types)}")
 
 def convert_timestamp(utc_timestamp):
     return parser.isoparse(utc_timestamp).strftime('%Y-%m-%d %H:%M:%S')
@@ -297,4 +372,6 @@ def poll_recent_changes_for_duration(duration_minutes=720, max_changes=1000):
     print(f"Total unique government changes logged: {total_changes}")
 
 if __name__ == "__main__":
+    setup_logging()
+    logging.info("Starting Wikipedia government edits monitor")
     poll_recent_changes_for_duration()
