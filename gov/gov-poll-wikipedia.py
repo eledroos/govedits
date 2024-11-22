@@ -15,7 +15,8 @@ WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_DIFF_BASE_URL = "https://en.wikipedia.org/w/index.php"
 STATE_FILE = "last_run_state.json"
 SCREENSHOTS_DIR = "diff_screenshots"
-GOV_IPS_FILE = "govedits - IP Address DB.csv"
+# GOV_IPS_FILE = "govedits - IP Address DB.csv" # old file
+GOV_IPS_FILE = "govedits - db.csv" # new file
 
 params = {
     "action": "query",
@@ -28,35 +29,76 @@ params = {
 
 class IPNetworkCache:
     def __init__(self):
-        self.networks: Dict[str, Dict[Union[ipaddress.IPv4Network, ipaddress.IPv6Network], str]] = {
-            'v4': {},
-            'v6': {}
+        self.networks = {
+            'v4': [],  # List of tuples: (start_ip, end_ip, organization)
+            'v6': []
         }
         self.load_government_networks()
+
+    def normalize_ipv4(self, ip_str: str) -> str:
+        """Remove leading zeros from IPv4 address octets"""
+        parts = ip_str.split('.')
+        return '.'.join(str(int(part)) for part in parts)
+
+    def normalize_ipv6(self, ip_str: str) -> str:
+        """Normalize IPv6 addresses"""
+        # Remove any spaces
+        ip_str = ip_str.strip()
+        
+        # If it ends with :: add zeros
+        if ip_str.endswith('::'):
+            ip_str = ip_str + '0'
+            
+        # Handle ffff format
+        if 'ffff:ffff:ffff:ffff:ffff' in ip_str:
+            return ip_str.replace('ffff:ffff:ffff:ffff:ffff', 'ffff:ffff:ffff:ffff:ffff')
+        return ip_str
 
     def load_government_networks(self):
         with open(GOV_IPS_FILE, 'r') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 try:
-                    # Try to create network directly first
-                    try:
-                        network = ipaddress.ip_network(row['ip_address'], strict=False)  # Added strict=False
-                        network_type = 'v6' if isinstance(network, ipaddress.IPv6Network) else 'v4'
-                        self.networks[network_type][network] = row['organization']
-                    except ValueError as e:
-                        print(f"Skipping invalid IP network {row['ip_address']}: {e}")
+                    start_ip = row['start_ip'].strip()
+                    end_ip = row['end_ip'].strip()
+                    org = row['organization'].strip()
+
+                    # Check if it's IPv6 (contains ::)
+                    if '::' in start_ip:
+                        try:
+                            start = ipaddress.IPv6Address(self.normalize_ipv6(start_ip))
+                            end = ipaddress.IPv6Address(self.normalize_ipv6(end_ip))
+                            self.networks['v6'].append((int(start), int(end), org))
+                        except Exception as e:
+                            print(f"Error processing IPv6 range for {org}: {start_ip} - {end_ip}: {e}")
+                    else:
+                        # Handle IPv4 addresses
+                        try:
+                            start_ip = self.normalize_ipv4(start_ip.replace('.000', '.0'))
+                            end_ip = self.normalize_ipv4(end_ip.replace('.255', '.255'))
+                            start = ipaddress.IPv4Address(start_ip)
+                            end = ipaddress.IPv4Address(end_ip)
+                            self.networks['v4'].append((int(start), int(end), org))
+                        except Exception as e:
+                            print(f"Error processing IPv4 range for {org}: {start_ip} - {end_ip}: {e}")
+
                 except Exception as e:
-                    print(f"Error processing row {row}: {e}")
+                    print(f"Error processing IP range for {org}: {start_ip} - {end_ip}: {e}")
 
     def check_ip(self, ip_str: str) -> tuple[bool, str]:
+        """Check if an IP is within any of our ranges"""
         try:
-            ip_addr = ipaddress.ip_address(ip_str)
-            network_type = 'v6' if isinstance(ip_addr, ipaddress.IPv6Address) else 'v4'
+            ip = ipaddress.ip_address(ip_str)
+            ip_int = int(ip)
             
-            for network, org in self.networks[network_type].items():
-                if ip_addr in network:
+            # Choose the correct network list based on IP version
+            network_list = self.networks['v6'] if isinstance(ip, ipaddress.IPv6Address) else self.networks['v4']
+            
+            # Check if IP falls within any range
+            for start_ip, end_ip, org in network_list:
+                if start_ip <= ip_int <= end_ip:
                     return True, org
+            
             return False, ""
         except ValueError:
             return False, ""
@@ -85,9 +127,13 @@ def create_diff_url(rev_id, parent_id):
     return f"{WIKIPEDIA_DIFF_BASE_URL}?diff={rev_id}&oldid={parent_id}"
 
 def fetch_recent_changes():
-    response = requests.get(WIKIPEDIA_API_URL, params=params)
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = requests.get(WIKIPEDIA_API_URL, params=params, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        print(f"Network error while fetching changes: {e}")
+        return {"query": {"recentchanges": []}}
 
 def sanitize_filename(filename):
     # Remove or replace invalid filename characters
@@ -238,7 +284,7 @@ def poll_recent_changes_for_duration(duration_minutes=720, max_changes=1000):
                 print(f"Updated timestamp to: {last_timestamp}")
                 
                 total_changes += len(government_changes)
-                print(f"Total anonymous changes logged: {total_changes}")
+                print(f"Total government changes logged: {total_changes}")
             else:
                 print("\nPolling for changes...", end='\r')
                 
@@ -248,7 +294,7 @@ def poll_recent_changes_for_duration(duration_minutes=720, max_changes=1000):
         time.sleep(10)  # Adjust this interval if needed
     
     print("\nPolling session completed.")
-    print(f"Total unique anonymous changes logged: {total_changes}")
+    print(f"Total unique government changes logged: {total_changes}")
 
 if __name__ == "__main__":
     poll_recent_changes_for_duration()
