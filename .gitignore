@@ -163,3 +163,4 @@ anonymous_changes.csv
 *.png
 .DS_Store
 *.csv
+*.zip
