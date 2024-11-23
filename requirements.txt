@@ -1,0 +1,6 @@
+atproto==0.2.0  # For Bluesky API integration
+requests==2.31.0  # For making HTTP requests to Wikipedia's API
+playwright==1.40.1  # For automated screenshot capture
+pydantic==2.1.1  # For validating data structures (used in atproto)
+python-dateutil==2.8.2  # For parsing and working with dates
+piexif==1.1.3  # For removing EXIF metadata from images
