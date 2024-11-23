@@ -1,27 +1,36 @@
-import requests
-import csv
-import time
-from datetime import datetime, timedelta
-import os
-from dateutil import parser
-import re
-import json
-from playwright.sync_api import sync_playwright
 import asyncio
+import csv
 import ipaddress
-from typing import Dict, Set, Union
+import json
 import logging
+import os
+import piexif
+import re
+import requests
+import time
+from atproto import Client, models
+from datetime import datetime, timedelta
+from dateutil import parser
+from playwright.sync_api import sync_playwright
+from typing import Dict, Set, Union
 from typing import List, Tuple
 
+# Suppress HTTP request logging
+logging.getLogger("httpx").setLevel(logging.WARNING)  # If `httpx` is used by the library
+logging.getLogger("urllib3").setLevel(logging.WARNING)  # If `urllib3` is used
+
+CONFIG_FILE = "config.json"
+GOV_IPS_FILE = "govedits - db.csv"
+LOG_FILE = "wikipedia_monitor.log"
+OUTPUT_CSV = "government_changes.csv"
+SCREENSHOTS_DIR = "diff_screenshots"
+SENSITIVE_CHANGES_CSV = "sensitive_content_changes.csv"
+STATE_FILE = "last_run_state.json"
 WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_DIFF_BASE_URL = "https://en.wikipedia.org/w/index.php"
-STATE_FILE = "last_run_state.json"
-SCREENSHOTS_DIR = "diff_screenshots"
-# GOV_IPS_FILE = "govedits - IP Address DB.csv" # old file
-GOV_IPS_FILE = "govedits - db.csv" # new file
-LOG_FILE = "wikipedia_monitor.log"
-SENSITIVE_CHANGES_CSV = "sensitive_content_changes.csv"
 
+# Enable or disable posting to Bluesky
+ENABLE_BLUESKY_POSTING = True
 
 # Content Detection Patterns
 PHONE_PATTERNS = [
@@ -32,6 +41,16 @@ ADDRESS_PATTERNS = [
     r'\b\d+\s+[A-Za-z\s]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr)\b',
     r'\b(?:PO|P\.O\.) Box\s+\d+\b'
 ]
+
+# Wikipedia RC API Params
+params = {
+    "action": "query",
+    "list": "recentchanges",
+    "rcprop": "title|ids|sizes|flags|user|timestamp|comment|revid|parentid",
+    "rcshow": "!bot",
+    "rclimit": 500,
+    "format": "json",
+}
 
 def setup_logging():
     logging.basicConfig(
@@ -45,31 +64,44 @@ def setup_logging():
     console.setLevel(logging.INFO)
     logging.getLogger('').addHandler(console)
 
-def detect_sensitive_content(text: str) -> Tuple[bool, List[str]]:
+def detect_sensitive_content(text: str, known_ids: Set[str] = None) -> Tuple[bool, List[Tuple[str, str]]]:
+    """
+    Detect sensitive content in the provided text while excluding known IDs.
+
+    Args:
+        text (str): The text to analyze.
+        known_ids (Set[str]): Set of known IDs (e.g., revision IDs) to exclude from detection.
+
+    Returns:
+        Tuple[bool, List[Tuple[str, str]]]: A tuple where the first element indicates if sensitive
+                                             content was found, and the second is a list of
+                                             tuples containing the type and the matched content.
+    """
     found_patterns = []
-    
+    known_ids = known_ids or set()
+
+    # Log known IDs for debugging
+    logging.debug(f"Known IDs to exclude: {known_ids}")
+
     # Check for phone numbers
     for pattern in PHONE_PATTERNS:
-        if re.search(pattern, text):
-            found_patterns.append("phone_number")
-            break
-            
+        for match in re.finditer(pattern, text):
+            matched_content = match.group()
+            if matched_content not in known_ids:
+                logging.debug(f"Matched phone number: {matched_content}")
+                found_patterns.append(("phone_number", matched_content))
+            else:
+                logging.debug(f"Excluded known ID: {matched_content}")
+
     # Check for addresses
     for pattern in ADDRESS_PATTERNS:
-        if re.search(pattern, text):
-            found_patterns.append("address")
-            break
-            
+        for match in re.finditer(pattern, text):
+            matched_content = match.group()
+            found_patterns.append(("address", matched_content))
+
     return bool(found_patterns), found_patterns
 
-params = {
-    "action": "query",
-    "list": "recentchanges",
-    "rcprop": "title|ids|sizes|flags|user|timestamp|comment|revid|parentid",
-    "rcshow": "!bot",
-    "rclimit": 500,
-    "format": "json",
-}
+
 
 class IPNetworkCache:
     def __init__(self):
@@ -114,7 +146,7 @@ class IPNetworkCache:
                             end = ipaddress.IPv6Address(self.normalize_ipv6(end_ip))
                             self.networks['v6'].append((int(start), int(end), org))
                         except Exception as e:
-                            print(f"Error processing IPv6 range for {org}: {start_ip} - {end_ip}: {e}")
+                            logging.warning(f"Error processing IPv6 range for {org}: {start_ip} - {end_ip}: {e}")
                     else:
                         # Handle IPv4 addresses
                         try:
@@ -124,10 +156,10 @@ class IPNetworkCache:
                             end = ipaddress.IPv4Address(end_ip)
                             self.networks['v4'].append((int(start), int(end), org))
                         except Exception as e:
-                            print(f"Error processing IPv4 range for {org}: {start_ip} - {end_ip}: {e}")
+                            logging.warning(f"Error processing IPv4 range for {org}: {start_ip} - {end_ip}: {e}")
 
                 except Exception as e:
-                    print(f"Error processing IP range for {org}: {start_ip} - {end_ip}: {e}")
+                    logging.warning(f"Error processing IP range for {org}: {start_ip} - {end_ip}: {e}")
 
     def check_ip(self, ip_str: str) -> tuple[bool, str]:
         """Check if an IP is within any of our ranges"""
@@ -159,8 +191,6 @@ def load_state():
     except (FileNotFoundError, json.JSONDecodeError):
         return None
 
-output_csv = "government_changes.csv"
-
 def is_ip_address(user):
     # Check if the user is an IP address (IPv4 or IPv6)
     ipv4_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
@@ -176,7 +206,7 @@ def fetch_recent_changes():
         response.raise_for_status()
         return response.json()
     except requests.RequestException as e:
-        print(f"Network error while fetching changes: {e}")
+        logging.warning(f"Network error while fetching changes: {e}")
         return {"query": {"recentchanges": []}}
 
 def sanitize_filename(filename):
@@ -237,14 +267,122 @@ def take_screenshot(diff_url, title, timestamp):
         
         return filepath
     except Exception as e:
-        print(f"Error taking screenshot for {title}: {str(e)}")
+        logging.warning(f"Error taking screenshot for {title}: {str(e)}")
         return None
 
+def load_bluesky_credentials(config_file=CONFIG_FILE):
+    """Load Bluesky credentials from a JSON config file."""
+    try:
+        with open(config_file) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logging.error("Bluesky credentials file not found.")
+        return None
+    
+def upload_image(client: Client, image_path: str) -> dict:
+    """Upload an image and return the blob"""
+    if not os.path.exists(image_path):
+        raise Exception(f"Image file not found: {image_path}")
+    
+    # Strip EXIF data
+    strip_exif(image_path)
+    
+    with open(image_path, "rb") as f:
+        img_bytes = f.read()
+    
+    # Check file size
+    if len(img_bytes) > 1000000:
+        raise Exception(f"Image too large: {len(img_bytes)} bytes. Maximum is 1,000,000 bytes")
+    
+    # Upload the image
+    response = client.com.atproto.repo.upload_blob(img_bytes)
+    return response.blob
+
+def strip_exif(image_path: str):
+    """Remove EXIF data from image"""
+    try:
+        piexif.remove(image_path)
+    except Exception:
+        pass  # Not all images have EXIF data
+
+def post_to_bluesky(changes, bluesky_credentials_file="config.json", delay=10):
+    """Post changes to Bluesky if ENABLE_BLUESKY_POSTING is True."""
+    if not ENABLE_BLUESKY_POSTING:
+        logging.info("Bluesky posting is disabled. No posts will be made.")
+        return
+
+    # Load Bluesky credentials
+    bluesky_credentials = load_bluesky_credentials(bluesky_credentials_file)
+    if not bluesky_credentials:
+        logging.error("Bluesky credentials are missing. Skipping posting.")
+        return
+
+    # Initialize Bluesky client
+    try:
+        client = Client()
+        client.login(bluesky_credentials['email'], bluesky_credentials['password'])
+    except Exception as e:
+        logging.error(f"Failed to log in to Bluesky: {e}")
+        return
+
+    # Post each change to Bluesky
+    for change in changes:
+        try:
+            title = change.get("title")
+            org = change.get("organization", "Unknown Organization")
+            screenshot_path = change.get("screenshot_path")
+            text = f"{title} Wikipedia article edited anonymously from {org}."
+
+            if screenshot_path and os.path.exists(screenshot_path):
+                try:
+                    blob = upload_image(client, screenshot_path)
+                    embed = {
+                        "$type": "app.bsky.embed.images",
+                        "images": [{"alt": f"Screenshot of edit for {title}", "image": blob}]
+                    }
+                    client.send_post(text=text, embed=embed)
+                    logging.info(f"Posted to Bluesky with image: {text}")
+                except Exception as e:
+                    logging.warning(f"Failed to upload image for Bluesky post: {e}")
+                    client.send_post(text=text)
+                    logging.info(f"Posted to Bluesky without image: {text}")
+            else:
+                logging.warning(f"Screenshot missing for {title}. Posting text-only.")
+                client.send_post(text=text)
+
+            # Respect delay to avoid rate limiting
+            time.sleep(delay)
+
+        except Exception as e:
+            logging.error(f"Error posting to Bluesky: {e}")
+
+def save_to_csv_and_post_to_bluesky(changes, ip_cache):
+    """Save changes to CSV and optionally post to Bluesky."""
+    save_to_csv(changes, ip_cache)  # Save to CSV as before
+
+    # Prepare changes for posting to Bluesky
+    formatted_changes = []
+    for change in changes:
+        _, org = ip_cache.check_ip(change.get("user"))
+        screenshot_path = take_screenshot(
+            create_diff_url(change.get("revid"), change.get("parentid")),
+            change.get("title"),
+            change.get("timestamp"),
+        )
+        formatted_changes.append({
+            "title": change.get("title"),
+            "organization": org,
+            "screenshot_path": screenshot_path,
+        })
+
+    # Post changes to Bluesky
+    post_to_bluesky(formatted_changes)
+
 def save_to_csv(changes, ip_cache):
-    file_exists = os.path.isfile(output_csv)
+    file_exists = os.path.isfile(OUTPUT_CSV)
     sensitive_exists = os.path.isfile(SENSITIVE_CHANGES_CSV)
 
-    with open(output_csv, mode="a", newline="", encoding="utf-8") as file, \
+    with open(OUTPUT_CSV, mode="a", newline="", encoding="utf-8") as file, \
          open(SENSITIVE_CHANGES_CSV, mode="a", newline="", encoding="utf-8") as sensitive_file:
         writer = csv.writer(file)
         sensitive_writer = csv.writer(sensitive_file)
@@ -264,8 +402,14 @@ def save_to_csv(changes, ip_cache):
 
         for change in changes:
             comment = change.get("comment", "")
-            is_sensitive, content_types = detect_sensitive_content(comment)
-            
+            known_ids = {str(change.get("revid", "")), str(change.get("parentid", ""))}
+            is_sensitive, content_matches = detect_sensitive_content(comment, known_ids=known_ids)
+
+            # debug
+            logging.debug(f"Known IDs passed for exclusion: {known_ids}")
+            logging.debug(f"Analyzing text: {comment}")
+            logging.debug(f"Sensitive matches: {content_matches}")
+
             diff_url = create_diff_url(change.get("revid"), change.get("parentid"))
             screenshot_path = take_screenshot(
                 diff_url, 
@@ -294,6 +438,8 @@ def save_to_csv(changes, ip_cache):
 
             # If sensitive, save to separate CSV
             if is_sensitive:
+                matched_types = [match[0] for match in content_matches]
+                matched_content = [match[1] for match in content_matches]
                 sensitive_writer.writerow([
                     change.get("title"),
                     change.get("user"),
@@ -302,76 +448,74 @@ def save_to_csv(changes, ip_cache):
                     change.get("rcid"),
                     diff_url,
                     comment,
-                    ", ".join(content_types)
+                    ", ".join(matched_types),
+                    "; ".join(matched_content)
                 ])
                 logging.warning(f"Sensitive content detected in edit by {change.get('user')} "
-                              f"({org}) to {change.get('title')}: {', '.join(content_types)}")
+                f"({org}) to {change.get('title')} with matches: {', '.join(matched_content)}")
 
 def convert_timestamp(utc_timestamp):
     return parser.isoparse(utc_timestamp).strftime('%Y-%m-%d %H:%M:%S')
 
-def poll_recent_changes_for_duration(duration_minutes=720, max_changes=1000):
-    start_time = datetime.now()
-    end_time = start_time + timedelta(minutes=duration_minutes)
-    total_changes = 0
-    processed_changes = set()
-    ip_cache = IPNetworkCache()
-    
-    # Load the last timestamp from the previous run
-    last_timestamp = load_state()
-    if last_timestamp:
-        params["rcstart"] = last_timestamp
-        print(f"Continuing from last recorded timestamp: {last_timestamp}")
-    
-    print(f"Polling for {duration_minutes} minutes or until {max_changes} anonymous changes are found...")
-    
-    while datetime.now() < end_time and total_changes < max_changes:
-        try:
-            changes = fetch_recent_changes().get("query", {}).get("recentchanges", [])
-            
-            government_changes = [
-                change for change in changes
-                if is_ip_address(change.get("user", "")) 
-                and ip_cache.check_ip(change.get("user", ""))[0]
-                and change.get("rcid") not in processed_changes
-            ]
-            
-            if government_changes:
-                print("\nNew government changes detected:")
-                print("-----------------------------")
-                for change in government_changes:
-                    _, org = ip_cache.check_ip(change.get("user"))
-                    print(f"  • {change.get('title')}")
-                    print(f"    - Editor: {change.get('user')}")
-                    print(f"    - Organization: {org}")
-                    print(f"    - Time: {convert_timestamp(change.get('timestamp'))}")
-                    if change.get('comment'):
-                        print(f"    - Comment: {change.get('comment')[:100]}...")
-                print("-----------------------------")
-                save_to_csv(government_changes, ip_cache) 
-                
-                for change in government_changes:
-                    processed_changes.add(change.get("rcid"))
-                
-                # Update timestamp from the last anonymous change we processed
-                last_timestamp = government_changes[-1]["timestamp"]
-                save_state(last_timestamp)
-                print(f"Updated timestamp to: {last_timestamp}")
-                
-                total_changes += len(government_changes)
-                print(f"Total government changes logged: {total_changes}")
-            else:
-                print("\nPolling for changes...", end='\r')
-                
-        except Exception as e:
-            print(f"Error during polling: {e}")
-        
-        time.sleep(10)  # Adjust this interval if needed
-    
-    print("\nPolling session completed.")
-    print(f"Total unique government changes logged: {total_changes}")
+def poll_recent_changes():
+   total_changes = 0
+   processed_changes = set()
+   ip_cache = IPNetworkCache()
+   
+   last_timestamp = load_state()
+   if last_timestamp:
+       params["rcstart"] = last_timestamp
+       logging.info(f"Continuing from last recorded timestamp: {last_timestamp}")
+   
+   logging.info("Starting indefinite polling for government changes...")
+   
+   try:
+       while True:
+           try:
+               current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+               logging.info(f"Polling for changes... {current_time}")
+               changes = fetch_recent_changes().get("query", {}).get("recentchanges", [])
+               
+               government_changes = [
+                   change for change in changes
+                   if is_ip_address(change.get("user", "")) 
+                   and ip_cache.check_ip(change.get("user", ""))[0]
+                   and change.get("rcid") not in processed_changes
+               ]
+               
+               if government_changes:
+                   logging.info("\nNew government changes detected:")
+                   logging.info("-----------------------------")
+                   for change in government_changes:
+                       _, org = ip_cache.check_ip(change.get("user"))
+                       logging.info(f"  • {change.get('title')}")
+                       logging.info(f"    - Editor: {change.get('user')}")
+                       logging.info(f"    - Organization: {org}")
+                       logging.info(f"    - Time: {convert_timestamp(change.get('timestamp'))}")
+                       if change.get('comment'):
+                           logging.info(f"    - Comment: {change.get('comment')[:100]}...")
+                   logging.info("-----------------------------")
+                   save_to_csv_and_post_to_bluesky(government_changes, ip_cache)
+                   
+                   for change in government_changes:
+                       processed_changes.add(change.get("rcid"))
+                   
+                   last_timestamp = government_changes[-1]["timestamp"]
+                   save_state(last_timestamp)
+                   logging.info(f"Updated timestamp to: {last_timestamp}")
+                   
+                   total_changes += len(government_changes)
+                   logging.info(f"Total government changes logged: {total_changes}")
+               
+           except Exception as e:
+               logging.error(f"Error during polling: {e}")
+           
+           time.sleep(10)
+
+   except KeyboardInterrupt:
+       logging.info("\nShutting down...")
+       logging.info(f"Final total of government changes logged: {total_changes}")
 
 if __name__ == "__main__":
     setup_logging()
-    logging.info("Starting Wikipedia government edits monitor")
-    poll_recent_changes_for_duration()
+    poll_recent_changes()
