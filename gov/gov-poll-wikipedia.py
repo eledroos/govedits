@@ -9,7 +9,7 @@ import re
 import requests
 import time
 from atproto import Client, models
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil import parser
 from playwright.sync_api import sync_playwright
 from typing import Dict, Set, Union
@@ -513,7 +513,9 @@ def poll_recent_changes():
            time.sleep(10)
 
    except KeyboardInterrupt:
-       logging.info("\nShutting down...")
+       shutdown_timestamp = datetime.now(timezone.utc).isoformat()
+       save_state(shutdown_timestamp)
+       logging.info(f"\nShutting down... Recorded shutdown timestamp: {shutdown_timestamp}")
        logging.info(f"Final total of government changes logged: {total_changes}")
 
 if __name__ == "__main__":
