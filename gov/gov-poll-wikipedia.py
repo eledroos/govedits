@@ -210,7 +210,7 @@ def take_screenshot(diff_url, title, timestamp):
             
             # Create context with viewport size
             context = browser.new_context(
-                viewport={'width': 1080, 'height': 1920}
+                viewport={'width': 1000, 'height': 1920}
             )
             
             # Create page
@@ -228,8 +228,8 @@ def take_screenshot(diff_url, title, timestamp):
                 clip={
                     'x': 0,
                     'y': 0,
-                    'width': 1080,
-                    'height': 1000  # Adjust this value to capture more or less
+                    'width': 1000,
+                    'height': 1200  # Adjust this value to capture more or less
                 }
             )
             
