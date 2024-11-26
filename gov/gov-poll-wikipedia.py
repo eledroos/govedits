@@ -50,6 +50,7 @@ params = {
     "rcshow": "!bot",
     "rclimit": 500,
     "format": "json",
+    "rcdir": "newer",
 }
 
 def setup_logging():
@@ -100,8 +101,6 @@ def detect_sensitive_content(text: str, known_ids: Set[str] = None) -> Tuple[boo
             found_patterns.append(("address", matched_content))
 
     return bool(found_patterns), found_patterns
-
-
 
 class IPNetworkCache:
     def __init__(self):
@@ -305,6 +304,30 @@ def strip_exif(image_path: str):
     except Exception:
         pass  # Not all images have EXIF data
 
+def create_facets_for_url(text: str, url: str) -> List[Dict]:
+    """Create facets for a URL in text on Bluesky"""
+    # Convert text to bytes to get correct byte positions
+    text_bytes = text.encode('utf-8')
+    url_bytes = url.encode('utf-8')
+    
+    # Find the byte position of the URL in the text
+    start_pos = text_bytes.find(url_bytes)
+    if start_pos == -1:
+        return []
+        
+    end_pos = start_pos + len(url_bytes)
+    
+    return [{
+        "index": {
+            "byteStart": start_pos,
+            "byteEnd": end_pos
+        },
+        "features": [{
+            "$type": "app.bsky.richtext.facet#link",
+            "uri": url
+        }]
+    }]
+
 def post_to_bluesky(changes, bluesky_credentials_file="config.json", delay=10):
     """Post changes to Bluesky if ENABLE_BLUESKY_POSTING is True."""
     if not ENABLE_BLUESKY_POSTING:
@@ -330,8 +353,14 @@ def post_to_bluesky(changes, bluesky_credentials_file="config.json", delay=10):
         try:
             title = change.get("title")
             org = change.get("organization", "Unknown Organization")
+            diff_url = create_diff_url(
+                change.get("change_data", {}).get("revid"),
+                change.get("change_data", {}).get("parentid")
+                )
             screenshot_path = change.get("screenshot_path")
-            text = f"{title} Wikipedia article edited anonymously from {org}."
+            text = f"{title} Wikipedia article edited anonymously from {org}.\n\n{diff_url}"
+
+            facets = create_facets_for_url(text, diff_url)
 
             if screenshot_path and os.path.exists(screenshot_path):
                 try:
@@ -340,15 +369,16 @@ def post_to_bluesky(changes, bluesky_credentials_file="config.json", delay=10):
                         "$type": "app.bsky.embed.images",
                         "images": [{"alt": f"Screenshot of edit for {title}", "image": blob}]
                     }
-                    client.send_post(text=text, embed=embed)
+                    client.send_post(text=text, facets=facets, embed=embed)
                     logging.info(f"Posted to Bluesky with image: {text}")
                 except Exception as e:
                     logging.warning(f"Failed to upload image for Bluesky post: {e}")
-                    client.send_post(text=text)
+                    client.send_post(text=text, facets=facets)
                     logging.info(f"Posted to Bluesky without image: {text}")
             else:
                 logging.warning(f"Screenshot missing for {title}. Posting text-only.")
                 client.send_post(text=text)
+                client.send_post(text=text, facets=facets)
 
             # Respect delay to avoid rate limiting
             time.sleep(delay)
@@ -373,6 +403,7 @@ def save_to_csv_and_post_to_bluesky(changes, ip_cache):
             "title": change.get("title"),
             "organization": org,
             "screenshot_path": screenshot_path,
+            "change_data": change
         })
 
     # Post changes to Bluesky
@@ -465,7 +496,9 @@ def poll_recent_changes():
    last_timestamp = load_state()
    if last_timestamp:
        params["rcstart"] = last_timestamp
-       logging.info(f"Continuing from last recorded timestamp: {last_timestamp}")
+       current_time = datetime.now(timezone.utc)
+       params["rcend"] = current_time.isoformat()
+       logging.info(f"Fetching changes between {last_timestamp} and {params['rcend']}")
    
    logging.info("Starting indefinite polling for government changes...")
    
