@@ -1,6 +1,6 @@
 # Government Edits, on Bluesky
 
-A Python-based tool to monitor anonymous edits on Wikipedia from government organizations, schools, and public institutions. This project is designed for researchers, journalists, and transparency advocates interested in how public entities interact with Wikipedia. [It posts updates automatically on Bluesky](https://bsky.app/profile/govedits.bsky.social).
+A Python-based tool to monitor anonymous edits on Wikipedia from government organizations, schools, and public institutions. This project is designed for researchers, journalists, and transparency advocates interested in how public entities interact with Wikipedia. [It posts updates automatically on Bluesky](https://bsky.app/profile/govedits.bsky.social) from a list that you create and provide.
 
 ## Features
 
@@ -74,7 +74,7 @@ A Python-based tool to monitor anonymous edits on Wikipedia from government orga
 Start the script to begin monitoring:
 
 ```bash
-python monitor.py
+python gov/gov-poll-wikipedia.py
 ```
 
 ### Key Outputs
