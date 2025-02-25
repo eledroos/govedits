@@ -14,6 +14,33 @@ from dateutil import parser
 from playwright.sync_api import sync_playwright
 from typing import Dict, Set, Union
 from typing import List, Tuple
+import colorama
+
+colorama.init()
+
+# Add this class definition near the top
+class ColoredFormatter(logging.Formatter):
+    """Adds colors and emojis to console logging"""
+    COLORS = {
+        logging.DEBUG: colorama.Fore.WHITE,
+        logging.INFO: colorama.Fore.CYAN,
+        logging.WARNING: colorama.Fore.YELLOW,
+        logging.ERROR: colorama.Fore.RED,
+        logging.CRITICAL: colorama.Fore.RED,
+    }
+    EMOJIS = {
+        logging.DEBUG: "🐛",
+        logging.INFO: "ℹ️",
+        logging.WARNING: "⚠️",
+        logging.ERROR: "❌",
+        logging.CRITICAL: "💥"
+    }
+
+    def format(self, record):
+        emoji = self.EMOJIS.get(record.levelno, "🔍")
+        color = self.COLORS.get(record.levelno, colorama.Fore.WHITE)
+        message = super().format(record)
+        return f"{color}{emoji} {message}{colorama.Style.RESET_ALL}"
 
 # Suppress HTTP request logging
 logging.getLogger("httpx").setLevel(logging.WARNING)  # If `httpx` is used by the library
@@ -30,7 +57,7 @@ WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_DIFF_BASE_URL = "https://en.wikipedia.org/w/index.php"
 
 # Enable or disable posting to Bluesky
-ENABLE_BLUESKY_POSTING = True
+ENABLE_BLUESKY_POSTING = False
 
 # Content Detection Patterns
 PHONE_PATTERNS = [
@@ -54,16 +81,26 @@ params = {
 }
 
 def setup_logging():
-    logging.basicConfig(
-        filename=LOG_FILE,
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+    """Configure logging with both file and colored console output"""
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # File handler (plain text)
+    file_handler = logging.FileHandler(LOG_FILE)
+    file_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    # Also print to console
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    logging.getLogger('').addHandler(console)
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+
+    # Console handler (colored)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(ColoredFormatter(
+        '%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    ))
+    logger.addHandler(console_handler)
 
 def detect_sensitive_content(text: str, known_ids: Set[str] = None) -> Tuple[bool, List[Tuple[str, str]]]:
     """
@@ -112,57 +149,109 @@ class IPNetworkCache:
 
     def normalize_ipv4(self, ip_str: str) -> str:
         """Remove leading zeros from IPv4 address octets"""
-        parts = ip_str.split('.')
-        return '.'.join(str(int(part)) for part in parts)
+        try:
+            # First, handle any potential format issues
+            ip_str = ip_str.strip()
+            
+            # Replace multiple zeros with single zeros
+            parts = ip_str.split('.')
+            
+            # Ensure all parts are valid numbers
+            cleaned_parts = []
+            for part in parts:
+                if part.strip() == '':
+                    cleaned_parts.append('0')  # Replace empty parts with '0'
+                else:
+                    # Remove leading zeros and ensure it's a valid number
+                    cleaned_parts.append(str(int(part)))
+                    
+            return '.'.join(cleaned_parts)
+        except Exception as e:
+            logging.debug(f"Error normalizing IPv4 address '{ip_str}': {e}")
+            return ip_str  # Return original if normalization fails
+
 
     def normalize_ipv6(self, ip_str: str) -> str:
         """Normalize IPv6 addresses"""
-        # Remove any spaces
-        ip_str = ip_str.strip()
-        
-        # If it ends with :: add zeros
-        if ip_str.endswith('::'):
-            ip_str = ip_str + '0'
+        try:
+            # Remove any spaces
+            ip_str = ip_str.strip()
             
-        # Handle ffff format
-        if 'ffff:ffff:ffff:ffff:ffff' in ip_str:
-            return ip_str.replace('ffff:ffff:ffff:ffff:ffff', 'ffff:ffff:ffff:ffff:ffff')
-        return ip_str
+            # If it ends with :: add zeros
+            if ip_str.endswith('::'):
+                ip_str = ip_str + '0'
+                
+            # Handle ffff format
+            if 'ffff:ffff:ffff:ffff:ffff' in ip_str:
+                return ip_str.replace('ffff:ffff:ffff:ffff:ffff', 'ffff:ffff:ffff:ffff:ffff')
+            
+            # Try to normalize using ipaddress module
+            try:
+                normalized = str(ipaddress.IPv6Address(ip_str))
+                return normalized
+            except:
+                return ip_str  # Return original if can't normalize with ipaddress
+                
+            return ip_str
+        except Exception as e:
+            logging.warning(f"Error normalizing IPv6 address {ip_str}: {e}")
+            return ip_str  # Return original if can't normalize
 
     def load_government_networks(self):
-        with open(GOV_IPS_FILE, 'r') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                try:
-                    start_ip = row['start_ip'].strip()
-                    end_ip = row['end_ip'].strip()
-                    org = row['organization'].strip()
+        try:
+            with open(GOV_IPS_FILE, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        start_ip = row.get('start_ip', '').strip()
+                        end_ip = row.get('end_ip', '').strip()
+                        org = row.get('organization', '').strip()
 
-                    # Check if it's IPv6 (contains ::)
-                    if '::' in start_ip:
-                        try:
-                            start = ipaddress.IPv6Address(self.normalize_ipv6(start_ip))
-                            end = ipaddress.IPv6Address(self.normalize_ipv6(end_ip))
-                            self.networks['v6'].append((int(start), int(end), org))
-                        except Exception as e:
-                            logging.warning(f"Error processing IPv6 range for {org}: {start_ip} - {end_ip}: {e}")
-                    else:
-                        # Handle IPv4 addresses
-                        try:
-                            start_ip = self.normalize_ipv4(start_ip.replace('.000', '.0'))
-                            end_ip = self.normalize_ipv4(end_ip.replace('.255', '.255'))
-                            start = ipaddress.IPv4Address(start_ip)
-                            end = ipaddress.IPv4Address(end_ip)
-                            self.networks['v4'].append((int(start), int(end), org))
-                        except Exception as e:
-                            logging.warning(f"Error processing IPv4 range for {org}: {start_ip} - {end_ip}: {e}")
+                        if not start_ip or not end_ip or not org:
+                            logging.warning(f"Skipping row with missing data: {row}")
+                            continue
 
-                except Exception as e:
-                    logging.warning(f"Error processing IP range for {org}: {start_ip} - {end_ip}: {e}")
+                        # Check if it's IPv6 (contains ::)
+                        if '::' in start_ip:
+                            try:
+                                start = ipaddress.IPv6Address(self.normalize_ipv6(start_ip))
+                                end = ipaddress.IPv6Address(self.normalize_ipv6(end_ip))
+                                self.networks['v6'].append((int(start), int(end), org))
+                            except Exception as e:
+                                logging.warning(f"Error processing IPv6 range for {org}: {start_ip} - {end_ip}: {e}")
+                        else:
+                            # Handle IPv4 addresses
+                            try:
+                                # Remove leading zeros from octets
+                                start_ip = self.normalize_ipv4(start_ip)
+                                end_ip = self.normalize_ipv4(end_ip)
+                                
+                                start = ipaddress.IPv4Address(start_ip)
+                                end = ipaddress.IPv4Address(end_ip)
+                                self.networks['v4'].append((int(start), int(end), org))
+                            except Exception as e:
+                                logging.warning(f"Error processing IPv4 range for {org}: {start_ip} - {end_ip}: {e}")
+
+                    except Exception as e:
+                        logging.warning(f"Error processing IP range: {e}")
+                        
+            logging.info(f"Loaded {len(self.networks['v4'])} IPv4 ranges and {len(self.networks['v6'])} IPv6 ranges")
+        except Exception as e:
+            logging.error(f"Error loading government networks: {e}")
+
 
     def check_ip(self, ip_str: str) -> tuple[bool, str]:
         """Check if an IP is within any of our ranges"""
         try:
+            # Try to normalize the IP address
+            try:
+                if ':' in ip_str:  # IPv6
+                    ip_str = self.normalize_ipv6(ip_str)
+                else:  # IPv4
+                    ip_str = self.normalize_ipv4(ip_str)
+            except:
+                pass  # Use original if normalization fails
+                
             ip = ipaddress.ip_address(ip_str)
             ip_int = int(ip)
             
@@ -175,7 +264,11 @@ class IPNetworkCache:
                     return True, org
             
             return False, ""
-        except ValueError:
+        except ValueError as e:
+            logging.warning(f"Invalid IP address format: {ip_str} - {e}")
+            return False, ""
+        except Exception as e:
+            logging.warning(f"Error checking IP {ip_str}: {e}")
             return False, ""
 
 def save_state(last_timestamp):
@@ -191,19 +284,28 @@ def load_state():
         return None
 
 def is_ip_address(user):
+    # Some basic validation before attempting regex matching
+    if not user or not isinstance(user, str):
+        return False
+        
     # Check if the user is an IP address (IPv4 or IPv6)
-    ipv4_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-    ipv6_pattern = r'^([0-9a-fA-F:]+)$'
-    return re.match(ipv4_pattern, user) or re.match(ipv6_pattern, user)
+    try:
+        ipaddress.ip_address(user)
+        return True
+    except ValueError:
+        return False
 
 def create_diff_url(rev_id, parent_id):
     return f"{WIKIPEDIA_DIFF_BASE_URL}?diff={rev_id}&oldid={parent_id}"
 
 def fetch_recent_changes():
     try:
+        logging.info(f"Making request with params: {params}")
         response = requests.get(WIKIPEDIA_API_URL, params=params, timeout=30)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        logging.info(f"📦 Received {len(data.get('query', {}).get('recentchanges', []))} recent changes")
+        return data
     except requests.RequestException as e:
         logging.warning(f"Network error while fetching changes: {e}")
         return {"query": {"recentchanges": []}}
@@ -489,68 +591,140 @@ def convert_timestamp(utc_timestamp):
     return parser.isoparse(utc_timestamp).strftime('%Y-%m-%d %H:%M:%S')
 
 def poll_recent_changes():
-   total_changes = 0
-   processed_changes = set()
-   ip_cache = IPNetworkCache()
-   
-   last_timestamp = load_state()
-   if last_timestamp:
-       params["rcstart"] = last_timestamp
-       current_time = datetime.now(timezone.utc)
-       params["rcend"] = current_time.isoformat()
-       logging.info(f"Fetching changes between {last_timestamp} and {params['rcend']}")
-   
-   logging.info("Starting indefinite polling for government changes...")
-   
-   try:
-       while True:
-           try:
-               current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-               logging.info(f"Polling for changes... {current_time}")
-               changes = fetch_recent_changes().get("query", {}).get("recentchanges", [])
-               
-               government_changes = [
-                   change for change in changes
-                   if is_ip_address(change.get("user", "")) 
-                   and ip_cache.check_ip(change.get("user", ""))[0]
-                   and change.get("rcid") not in processed_changes
-               ]
-               
-               if government_changes:
-                   logging.info("\nNew government changes detected:")
-                   logging.info("-----------------------------")
-                   for change in government_changes:
-                       _, org = ip_cache.check_ip(change.get("user"))
-                       logging.info(f"  • {change.get('title')}")
-                       logging.info(f"    - Editor: {change.get('user')}")
-                       logging.info(f"    - Organization: {org}")
-                       logging.info(f"    - Time: {convert_timestamp(change.get('timestamp'))}")
-                       if change.get('comment'):
-                           logging.info(f"    - Comment: {change.get('comment')[:100]}...")
-                   logging.info("-----------------------------")
-                   save_to_csv_and_post_to_bluesky(government_changes, ip_cache)
-                   
-                   for change in government_changes:
-                       processed_changes.add(change.get("rcid"))
-                   
-                   last_timestamp = government_changes[-1]["timestamp"]
-                   save_state(last_timestamp)
-                   logging.info(f"Updated timestamp to: {last_timestamp}")
-                   
-                   total_changes += len(government_changes)
-                   logging.info(f"Total government changes logged: {total_changes}")
-               
-           except Exception as e:
-               logging.error(f"Error during polling: {e}")
-           
-           time.sleep(10)
+    total_changes = 0
+    processed_changes = set()
+    ip_cache = IPNetworkCache()
+    
+    # Debug information about loaded IP ranges
+    logging.info(f"Loaded {len(ip_cache.networks['v4'])} IPv4 ranges and {len(ip_cache.networks['v6'])} IPv6 ranges")
+    
+    last_timestamp = load_state()
+    if last_timestamp:
+        params["rcstart"] = last_timestamp
+        current_time = datetime.now(timezone.utc)
+        params["rcend"] = current_time.isoformat()
+        logging.info(f"⏳ Fetching changes between {last_timestamp} and {params['rcend']}")
+    
+    logging.info("Starting indefinite polling for government changes...")
+    
+    try:
+        while True:
+            try:
+                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                logging.info(f"Polling for changes... {current_time}")
+                changes = fetch_recent_changes().get("query", {}).get("recentchanges", [])
+                
+                # Log some change samples for debugging
+                if changes:
+                    logging.info(f"Sample changes (showing first 3):")
+                    for i, change in enumerate(changes[:3]):
+                        logging.info(f"Change {i+1}: Title={change.get('title')}, User={change.get('user')}")
+                
+                ip_changes = [
+                    change for change in changes
+                    if is_ip_address(change.get("user", ""))
+                ]
+                
+                if ip_changes:
+                    logging.info(f"Found {len(ip_changes)} changes from IP addresses")
+                    
+                    # Log some IP checks for debugging
+                    for i, change in enumerate(ip_changes[:3]):
+                        user_ip = change.get("user", "")
+                        is_gov, org = ip_cache.check_ip(user_ip)
+                        logging.info(f"IP check for {user_ip}: is_government={is_gov}, org={org}")
+                
+                government_changes = [
+                    change for change in ip_changes
+                    if is_ip_address(change.get("user", "")) 
+                    and ip_cache.check_ip(change.get("user", ""))[0]
+                    and change.get("rcid") not in processed_changes
+                ]
+                
+                if government_changes:
+                    logging.info("\n🚨🚨🚨 GOVERNMENT EDIT DETECTED 🚨🚨🚨")
+                    for change in government_changes:
+                        _, org = ip_cache.check_ip(change.get("user"))
+                        logging.info(f"""
+                        📌 Title: {change.get('title')}
+                        👤 Editor: {change.get('user')}
+                        🏢 Organization: {colorama.Fore.MAGENTA}{org}{colorama.Style.RESET_ALL}
+                        🕒 Time: {convert_timestamp(change.get('timestamp'))}
+                        💬 Comment: {change.get('comment','')[:100]}...""")
+                    logging.info("🔔🔔🔔 END OF GOVERNMENT ALERT 🔔🔔🔔")
+                    save_to_csv_and_post_to_bluesky(government_changes, ip_cache)
+                    
+                    for change in government_changes:
+                        processed_changes.add(change.get("rcid"))
+                    
+                    last_timestamp = government_changes[-1]["timestamp"]
+                    save_state(last_timestamp)
+                    logging.info(f"Updated timestamp to: {last_timestamp}")
+                    
+                    total_changes += len(government_changes)
+                    logging.info(f"Total government changes logged: {total_changes}")
+                
+            except Exception as e:
+                logging.error(f"Error during polling: {e}", exc_info=True)  # Added exc_info for stack trace
+            
+            time.sleep(10)
 
-   except KeyboardInterrupt:
-       shutdown_timestamp = datetime.now(timezone.utc).isoformat()
-       save_state(shutdown_timestamp)
-       logging.info(f"\nShutting down... Recorded shutdown timestamp: {shutdown_timestamp}")
-       logging.info(f"Final total of government changes logged: {total_changes}")
+    except KeyboardInterrupt:
+        shutdown_timestamp = datetime.now(timezone.utc).isoformat()
+        save_state(shutdown_timestamp)
+        logging.info(f"\nShutting down... Recorded shutdown timestamp: {shutdown_timestamp}")
+        logging.info(f"Final total of government changes logged: {total_changes}")
+
+def test_ip_matching():
+    ip_cache = IPNetworkCache()
+    
+    # Test with different formats from your CSV
+    test_ips = [
+        "23.90.88.5",         # Should match City Of Anacortes
+        "023.090.088.005",    # Same as above with leading zeros
+        "23.134.224.10",      # Should match Pa House Of Representatives
+        "56.15.255.254",      # Should match US Postal Service
+        "192.168.1.1",        # Should not match any government org
+        "2620:127:9000::1",   # IPv6 - Should match Academy School District 20 if in your data
+    ]
+    
+    print("\nTesting IP matching:")
+    print("====================")
+    for ip in test_ips:
+        is_gov, org = ip_cache.check_ip(ip)
+        print(f"IP: {ip}")
+        print(f"  Is Government: {is_gov}")
+        print(f"  Organization: {org}")
+        print()
+    
+    # Test with actual IPs from your database
+    print("Testing sample IPs from the database:")
+    print("====================================")
+    sample_count = 0
+    for protocol in ['v4', 'v6']:
+        for start_ip, end_ip, org in ip_cache.networks[protocol][:3]:  # Get the first 3 of each type
+            # Convert int back to IP address
+            if protocol == 'v4':
+                ip_obj = ipaddress.IPv4Address(start_ip)
+            else:
+                ip_obj = ipaddress.IPv6Address(start_ip)
+                
+            ip_str = str(ip_obj)
+            is_gov, matched_org = ip_cache.check_ip(ip_str)
+            print(f"IP: {ip_str}")
+            print(f"  Should match: {org}")
+            print(f"  Is Government: {is_gov}")
+            print(f"  Matched Organization: {matched_org}")
+            print(f"  Correct match: {org == matched_org}")
+            print()
+            sample_count += 1
+            
+            if sample_count >= 6:  # Limit to 6 samples total
+                break
 
 if __name__ == "__main__":
     setup_logging()
+    # Uncomment to test IP matching
+    # test_ip_matching()
+
     poll_recent_changes()
