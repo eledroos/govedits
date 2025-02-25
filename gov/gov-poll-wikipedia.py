@@ -29,11 +29,11 @@ class ColoredFormatter(logging.Formatter):
         logging.CRITICAL: colorama.Fore.RED,
     }
     EMOJIS = {
-        logging.DEBUG: "🐛",
-        logging.INFO: "ℹ️",
-        logging.WARNING: "⚠️",
-        logging.ERROR: "❌",
-        logging.CRITICAL: "💥"
+        logging.DEBUG: "🐛 ",
+        logging.INFO: "ℹ️ ",
+        logging.WARNING: "⚠️ ",
+        logging.ERROR: "❌ ",
+        logging.CRITICAL: "💥 "
     }
 
     def format(self, record):
@@ -686,6 +686,8 @@ def test_ip_matching():
         "56.15.255.254",      # Should match US Postal Service
         "192.168.1.1",        # Should not match any government org
         "2620:127:9000::1",   # IPv6 - Should match Academy School District 20 if in your data
+        "156.033.123.123",     # Should match US Senate
+        "161.160.123.123"     # U.S. Department Of The Interior
     ]
     
     print("\nTesting IP matching:")
@@ -724,7 +726,8 @@ def test_ip_matching():
 
 if __name__ == "__main__":
     setup_logging()
+    
     # Uncomment to test IP matching
     # test_ip_matching()
 
-    poll_recent_changes()
+    # poll_recent_changes()
