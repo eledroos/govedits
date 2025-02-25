@@ -57,7 +57,7 @@ WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_DIFF_BASE_URL = "https://en.wikipedia.org/w/index.php"
 
 # Enable or disable posting to Bluesky
-ENABLE_BLUESKY_POSTING = False
+ENABLE_BLUESKY_POSTING = True
 
 # Content Detection Patterns
 PHONE_PATTERNS = [
