@@ -57,7 +57,7 @@ WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_DIFF_BASE_URL = "https://en.wikipedia.org/w/index.php"
 
 # Enable or disable posting to Bluesky
-ENABLE_BLUESKY_POSTING = True
+ENABLE_BLUESKY_POSTING = False
 
 # Content Detection Patterns
 PHONE_PATTERNS = [
@@ -595,23 +595,25 @@ def poll_recent_changes():
     processed_changes = set()
     ip_cache = IPNetworkCache()
     
-    # Debug information about loaded IP ranges
     logging.info(f"Loaded {len(ip_cache.networks['v4'])} IPv4 ranges and {len(ip_cache.networks['v6'])} IPv6 ranges")
     
     last_timestamp = load_state()
-    if last_timestamp:
-        params["rcstart"] = last_timestamp
-        current_time = datetime.now(timezone.utc)
-        params["rcend"] = current_time.isoformat()
-        logging.info(f"⏳ Fetching changes between {last_timestamp} and {params['rcend']}")
     
     logging.info("Starting indefinite polling for government changes...")
     
     try:
         while True:
             try:
-                current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                logging.info(f"Polling for changes... {current_time}")
+                # Update timestamps for this iteration
+                current_time_utc = datetime.now(timezone.utc)
+                params["rcend"] = current_time_utc.isoformat()
+                if last_timestamp:
+                    params["rcstart"] = last_timestamp
+                else:
+                    params.pop("rcstart", None)  # Remove rcstart if no last timestamp
+                
+                logging.info(f"⏳ Fetching changes from {last_timestamp or 'beginning'} to {params['rcend']}")
+                
                 changes = fetch_recent_changes().get("query", {}).get("recentchanges", [])
                 
                 # Log some change samples for debugging
@@ -730,4 +732,4 @@ if __name__ == "__main__":
     # Uncomment to test IP matching
     # test_ip_matching()
 
-    # poll_recent_changes()
+    poll_recent_changes()
