@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Deque, Dict, List, Set, Tuple
 
 import requests
+import requests.exceptions
 
 from atproto import Client, models
 from dateutil import parser
@@ -349,7 +350,13 @@ class HistoricalProcessor:
     def __init__(self):
         self.ip_cache = IPNetworkCache()
         self.state = self.load_state()
-        self.queue: Deque[Dict] = deque()
+
+        # Validate state consistency
+        if self.state["continue_token"] and not self.state["last_timestamp"]:
+            logging.warning("Invalid state: continuation token without timestamp")
+            self.state["continue_token"] = None
+
+        self.queue = self.state["queue"]
         self.bluesky_client = self.init_bluesky()
         
     def init_bluesky(self):
@@ -406,12 +413,27 @@ class HistoricalProcessor:
         try:
             with open(CONFIG['state_file'], 'r') as f:
                 state = json.load(f)
-                return {
+                loaded_state = {
                     "last_timestamp": state.get("last_timestamp"),
                     "processed_rcids": set(state.get("processed_rcids", [])),
                     "continue_token": state.get("continue_token"),
                     "queue": deque(state.get("queue", []))
                 }
+                
+                # Validate timestamp format
+                if loaded_state["last_timestamp"]:
+                    try:
+                        parser.isoparse(loaded_state["last_timestamp"])
+                    except:
+                        logging.warning("Invalid timestamp in state, resetting")
+                        loaded_state["last_timestamp"] = None
+                
+                # Validate token and timestamp coherence
+                if loaded_state["continue_token"] and not loaded_state["last_timestamp"]:
+                    logging.warning("Invalid state: token without timestamp, resetting")
+                    loaded_state["continue_token"] = None 
+                        
+                return loaded_state
         except FileNotFoundError:
             return default_state
         except Exception as e:
@@ -444,35 +466,54 @@ class HistoricalProcessor:
                     else datetime.now(timezone.utc) - timedelta(days=CONFIG['days_to_fetch'])).isoformat(),
             "rcend": datetime.now(timezone.utc).isoformat(),
         }
-        
-        if self.state["continue_token"]:
-            params["rccontinue"] = self.state["continue_token"]
 
-        try:
-            response = requests.get(
-                "https://en.wikipedia.org/w/api.php",
-                params=params,
-                timeout=30
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            changes = data.get("query", {}).get("recentchanges", [])
-            continue_token = data.get("continue", {}).get("rccontinue")
-            
-            if changes:
-                logging.info(f"🌐 Fetched {len(changes)} changes")
-                # Log first 3 IP addresses found
-                ip_edits = [c for c in changes if is_ip_address(c.get('user', ''))]
-                logging.debug("First 3 IPs in batch:")
-                for i, edit in enumerate(ip_edits[:3]):
-                    logging.debug(f"  {i+1}. {edit.get('user', '')}")
-            
-            return changes, continue_token
-            
-        except Exception as e:
-            logging.error(f"API request failed: {e}")
-            return [], None
+        retries = 0
+        max_retries = 3
+        backoff_factor = 1.5
+        
+        while retries <= max_retries:
+            try:
+                response = requests.get(
+                    "https://en.wikipedia.org/w/api.php",
+                    params=params,
+                    timeout=60  # Increased timeout
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                changes = data.get("query", {}).get("recentchanges", [])
+                continue_token = data.get("continue", {}).get("rccontinue")
+                
+                # Save state immediately after successful fetch
+                # Update BOTH timestamp and token atomically
+                if changes:
+                    logging.info(f"🌐 Fetched {len(changes)} changes")
+                    new_timestamp = max(parser.isoparse(c['timestamp']) for c in changes)
+                    self.state["last_timestamp"] = new_timestamp.isoformat()
+                    self.state["continue_token"] = continue_token
+                    self.save_state() 
+                
+                return changes, continue_token
+                
+            except requests.exceptions.Timeout as e:
+                logging.error(f"⏳ Timeout fetching changes: {e}")
+                # Clear continuation token as it may be invalid after timeout
+                self.state["continue_token"] = None
+                self.save_state()
+                raise  # Re-raise to trigger retry logic
+                
+            except requests.exceptions.RequestException as e:
+                logging.error(f"🌐 Network error: {e}")
+                self.state["continue_token"] = None  # Reset token
+                self.save_state()
+                raise
+                
+            except Exception as e:
+                logging.error(f"❌ Unexpected error: {e}")
+                if 'last_timestamp' in self.state:
+                    self.state["continue_token"] = None  # Clear potentially bad token
+                    self.save_state()
+                raise
 
     def process_changes(self, changes: List[Dict]):
         """Process a batch of changes with comprehensive logging"""
