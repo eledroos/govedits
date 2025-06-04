@@ -47,7 +47,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)  # If `httpx` is used by th
 logging.getLogger("urllib3").setLevel(logging.WARNING)  # If `urllib3` is used
 
 CONFIG_FILE = "config.json"
-GOV_IPS_FILE = "govedits - db.csv"
+GOV_IPS_FILE = os.path.join(os.path.dirname(__file__), "govedits - db.csv")
 LOG_FILE = "wikipedia_monitor.log"
 OUTPUT_CSV = "government_changes.csv"
 SCREENSHOTS_DIR = "diff_screenshots"
@@ -58,6 +58,9 @@ WIKIPEDIA_DIFF_BASE_URL = "https://en.wikipedia.org/w/index.php"
 
 # Enable or disable posting to Bluesky
 ENABLE_BLUESKY_POSTING = False
+
+# Filter for federal agencies only (True = federal only, False = all government)
+FEDERAL_ONLY = True
 
 # Content Detection Patterns
 PHONE_PATTERNS = [
@@ -140,11 +143,12 @@ def detect_sensitive_content(text: str, known_ids: Set[str] = None) -> Tuple[boo
     return bool(found_patterns), found_patterns
 
 class IPNetworkCache:
-    def __init__(self):
+    def __init__(self, federal_only=False):
         self.networks = {
-            'v4': [],  # List of tuples: (start_ip, end_ip, organization)
+            'v4': [],  # List of tuples: (start_ip, end_ip, organization, is_federal)
             'v6': []
         }
+        self.federal_only = federal_only
         self.load_government_networks()
 
     def normalize_ipv4(self, ip_str: str) -> str:
@@ -199,6 +203,9 @@ class IPNetworkCache:
 
     def load_government_networks(self):
         try:
+            total_loaded = {'v4': 0, 'v6': 0}
+            federal_loaded = {'v4': 0, 'v6': 0}
+            
             with open(GOV_IPS_FILE, 'r') as f:
                 reader = csv.DictReader(f)
                 for row in reader:
@@ -206,9 +213,14 @@ class IPNetworkCache:
                         start_ip = row.get('start_ip', '').strip()
                         end_ip = row.get('end_ip', '').strip()
                         org = row.get('organization', '').strip()
+                        is_federal = row.get('is_federal', 'no').strip().lower() == 'yes'
 
                         if not start_ip or not end_ip or not org:
                             logging.warning(f"Skipping row with missing data: {row}")
+                            continue
+
+                        # Skip non-federal agencies if federal_only is enabled
+                        if self.federal_only and not is_federal:
                             continue
 
                         # Check if it's IPv6 (contains ::)
@@ -216,7 +228,10 @@ class IPNetworkCache:
                             try:
                                 start = ipaddress.IPv6Address(self.normalize_ipv6(start_ip))
                                 end = ipaddress.IPv6Address(self.normalize_ipv6(end_ip))
-                                self.networks['v6'].append((int(start), int(end), org))
+                                self.networks['v6'].append((int(start), int(end), org, is_federal))
+                                total_loaded['v6'] += 1
+                                if is_federal:
+                                    federal_loaded['v6'] += 1
                             except Exception as e:
                                 logging.warning(f"Error processing IPv6 range for {org}: {start_ip} - {end_ip}: {e}")
                         else:
@@ -228,14 +243,20 @@ class IPNetworkCache:
                                 
                                 start = ipaddress.IPv4Address(start_ip)
                                 end = ipaddress.IPv4Address(end_ip)
-                                self.networks['v4'].append((int(start), int(end), org))
+                                self.networks['v4'].append((int(start), int(end), org, is_federal))
+                                total_loaded['v4'] += 1
+                                if is_federal:
+                                    federal_loaded['v4'] += 1
                             except Exception as e:
                                 logging.warning(f"Error processing IPv4 range for {org}: {start_ip} - {end_ip}: {e}")
 
                     except Exception as e:
                         logging.warning(f"Error processing IP range: {e}")
                         
-            logging.info(f"Loaded {len(self.networks['v4'])} IPv4 ranges and {len(self.networks['v6'])} IPv6 ranges")
+            filter_msg = " (federal only)" if self.federal_only else " (all government)"
+            logging.info(f"Loaded {total_loaded['v4']} IPv4 ranges and {total_loaded['v6']} IPv6 ranges{filter_msg}")
+            if not self.federal_only:
+                logging.info(f"Federal agencies: {federal_loaded['v4']} IPv4 and {federal_loaded['v6']} IPv6 ranges")
         except Exception as e:
             logging.error(f"Error loading government networks: {e}")
 
@@ -259,7 +280,7 @@ class IPNetworkCache:
             network_list = self.networks['v6'] if isinstance(ip, ipaddress.IPv6Address) else self.networks['v4']
             
             # Check if IP falls within any range
-            for start_ip, end_ip, org in network_list:
+            for start_ip, end_ip, org, is_federal in network_list:
                 if start_ip <= ip_int <= end_ip:
                     return True, org
             
@@ -593,7 +614,7 @@ def convert_timestamp(utc_timestamp):
 def poll_recent_changes():
     total_changes = 0
     processed_changes = set()
-    ip_cache = IPNetworkCache()
+    ip_cache = IPNetworkCache(federal_only=FEDERAL_ONLY)
     
     logging.info(f"Loaded {len(ip_cache.networks['v4'])} IPv4 ranges and {len(ip_cache.networks['v6'])} IPv6 ranges")
     
@@ -659,12 +680,15 @@ def poll_recent_changes():
                     for change in government_changes:
                         processed_changes.add(change.get("rcid"))
                     
-                    last_timestamp = government_changes[-1]["timestamp"]
-                    save_state(last_timestamp)
-                    logging.info(f"Updated timestamp to: {last_timestamp}")
-                    
                     total_changes += len(government_changes)
                     logging.info(f"Total government changes logged: {total_changes}")
+                
+                # Always update timestamp to avoid infinite loops, regardless of government changes found
+                if changes:
+                    latest_timestamp = max(change["timestamp"] for change in changes)
+                    last_timestamp = latest_timestamp
+                    save_state(last_timestamp)
+                    logging.debug(f"Updated timestamp to: {last_timestamp}")
                 
             except Exception as e:
                 logging.error(f"Error during polling: {e}", exc_info=True)  # Added exc_info for stack trace
@@ -678,7 +702,7 @@ def poll_recent_changes():
         logging.info(f"Final total of government changes logged: {total_changes}")
 
 def test_ip_matching():
-    ip_cache = IPNetworkCache()
+    ip_cache = IPNetworkCache(federal_only=FEDERAL_ONLY)
     
     # Test with different formats from your CSV
     test_ips = [

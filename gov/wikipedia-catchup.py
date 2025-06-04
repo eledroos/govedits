@@ -100,7 +100,7 @@ class ColoredFormatter(logging.Formatter):
 # Configuration
 CONFIG = {
     # Files
-    "gov_ips_file": "govedits - db.csv",
+    "gov_ips_file": os.path.join(os.path.dirname(__file__), "govedits - db.csv"),
     "output_csv": "historical_government_changes.csv",
     "sensitive_csv": "historical_sensitive_changes.csv",
     "state_file": "catchup_state.json",
@@ -119,7 +119,8 @@ CONFIG = {
     
     # Features
     "enable_bluesky": True,
-    "bluesky_credentials": "config.json"
+    "bluesky_credentials": "config.json",
+    "federal_only": True  # True = federal agencies only, False = all government
 }
 
 # Add after CONFIG but before classes
@@ -136,8 +137,9 @@ def sanitize_filename(filename):
     return re.sub(r'[<>:"/\\|?*]', '_', filename)
 
 class IPNetworkCache:
-    def __init__(self):
+    def __init__(self, federal_only=False):
         self.networks = {'v4': [], 'v6': []}
+        self.federal_only = federal_only
         self.load_government_networks()
 
     def normalize_ipv4(self, ip_str: str) -> str:
@@ -194,18 +196,25 @@ class IPNetworkCache:
     def load_government_networks(self):
         """Load and validate IP ranges from CSV"""
         try:
+            total_loaded = {'v4': 0, 'v6': 0}
+            federal_loaded = {'v4': 0, 'v6': 0}
+            
             with open(CONFIG['gov_ips_file'], 'r') as f:
                 reader = csv.DictReader(f)
-                valid_rows = 0
                 
                 for row in reader:
                     try:
                         org = row['organization'].strip()
                         start_ip = row['start_ip'].strip()
                         end_ip = row['end_ip'].strip()
+                        is_federal = row.get('is_federal', 'no').strip().lower() == 'yes'
                         
                         if not all([org, start_ip, end_ip]):
                             logging.warning(f"Skipping incomplete row: {row}")
+                            continue
+
+                        # Skip non-federal agencies if federal_only is enabled
+                        if self.federal_only and not is_federal:
                             continue
 
                         # Normalize and validate IPs
@@ -214,25 +223,36 @@ class IPNetworkCache:
                             end_ip = self.normalize_ipv6(end_ip)
                             start = int(ipaddress.IPv6Address(start_ip))
                             end = int(ipaddress.IPv6Address(end_ip))
-                            self.networks['v6'].append((start, end, org))
+                            self.networks['v6'].append((start, end, org, is_federal))
+                            total_loaded['v6'] += 1
+                            if is_federal:
+                                federal_loaded['v6'] += 1
                         else:
                             start_ip = self.normalize_ipv4(start_ip)
                             end_ip = self.normalize_ipv4(end_ip)
                             start = int(ipaddress.IPv4Address(start_ip))
                             end = int(ipaddress.IPv4Address(end_ip))
-                            self.networks['v4'].append((start, end, org))
+                            self.networks['v4'].append((start, end, org, is_federal))
+                            total_loaded['v4'] += 1
+                            if is_federal:
+                                federal_loaded['v4'] += 1
                             
-                        valid_rows += 1
-                        
                     except Exception as e:
                         logging.debug(f"Skipping invalid row for {org}: {e}")
                         continue
                         
+            filter_msg = " (federal only)" if self.federal_only else " (all government)"
             logging.info(
                 f"{colorama.Fore.GREEN}✅ Successfully loaded government IP ranges: "
-                f"{len(self.networks['v4'])} IPv4 and {len(self.networks['v6'])} IPv6"
+                f"{total_loaded['v4']} IPv4 and {total_loaded['v6']} IPv6{filter_msg}"
                 f"{colorama.Style.RESET_ALL}"
             )
+            if not self.federal_only:
+                logging.info(
+                    f"{colorama.Fore.BLUE}🏛️ Federal agencies: "
+                    f"{federal_loaded['v4']} IPv4 and {federal_loaded['v6']} IPv6 ranges"
+                    f"{colorama.Style.RESET_ALL}"
+                )
                 
         except Exception as e:
             logging.error(f"{colorama.Fore.RED}❌ Failed to load IP ranges: {e}{colorama.Style.RESET_ALL}")
@@ -250,7 +270,7 @@ class IPNetworkCache:
                 
             ip_int = int(ip)
             
-            for start, end, org in self.networks[network_type]:
+            for start, end, org, is_federal in self.networks[network_type]:
                 if start <= ip_int <= end:
                     return True, org
             return False, ""
@@ -348,7 +368,7 @@ def create_facets(text: str, url: str) -> List[Dict]:
 
 class HistoricalProcessor:
     def __init__(self):
-        self.ip_cache = IPNetworkCache()
+        self.ip_cache = IPNetworkCache(federal_only=CONFIG['federal_only'])
         self.state = self.load_state()
 
         # Validate state consistency
@@ -356,7 +376,7 @@ class HistoricalProcessor:
             logging.warning("Invalid state: continuation token without timestamp")
             self.state["continue_token"] = None
 
-        self.queue = self.state["queue"]
+        self.queue = self.state["queue"] if isinstance(self.state["queue"], deque) else deque(self.state["queue"])
         self.bluesky_client = self.init_bluesky()
         
     def init_bluesky(self):
