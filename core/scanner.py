@@ -20,9 +20,13 @@ def fetch_recent_changes(params: Dict = None) -> Dict:
     if params is None:
         params = WIKIPEDIA_RC_PARAMS.copy()
 
+    headers = {
+        'User-Agent': 'GovEditsBot/1.0 (Wikipedia government edit monitor; educational/transparency project)'
+    }
+
     try:
         logging.info(f"Making request with params: {params}")
-        response = requests.get(WIKIPEDIA_API_URL, params=params, timeout=30)
+        response = requests.get(WIKIPEDIA_API_URL, params=params, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
 

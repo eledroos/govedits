@@ -131,10 +131,15 @@ class HistoricalProcessor:
             "rcend": datetime.now(timezone.utc).isoformat(),
         }
 
+        headers = {
+            'User-Agent': 'GovEditsBot/1.0 (Wikipedia government edit monitor; educational/transparency project)'
+        }
+
         try:
             response = requests.get(
                 "https://en.wikipedia.org/w/api.php",
                 params=params,
+                headers=headers,
                 timeout=60
             )
             response.raise_for_status()
