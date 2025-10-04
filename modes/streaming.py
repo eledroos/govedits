@@ -122,6 +122,39 @@ def run_streaming_monitor(filter_level: str = DEFAULT_FILTER):
 
     logging.info("Connecting to EventStreams API...")
 
+    # Detect if we're resuming from the past
+    is_catching_up = False
+    catchup_start_time = None
+    catchup_end_time = None
+
+    if last_timestamp:
+        try:
+            last_dt = parser.isoparse(last_timestamp)
+            now_dt = datetime.now(timezone.utc)
+            gap = now_dt - last_dt
+            gap_seconds = gap.total_seconds()
+
+            if gap_seconds > 300:  # More than 5 minutes
+                is_catching_up = True
+                catchup_start_time = last_dt
+                catchup_end_time = now_dt
+
+                # Format the gap nicely
+                if gap.days > 0:
+                    gap_str = f"{gap.days} day{'s' if gap.days != 1 else ''}"
+                elif gap_seconds >= 3600:
+                    hours = int(gap_seconds // 3600)
+                    gap_str = f"{hours} hour{'s' if hours != 1 else ''}"
+                else:
+                    minutes = int(gap_seconds // 60)
+                    gap_str = f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+                print(f"{colorama.Fore.YELLOW}⏳ Catching up from: {colorama.Fore.CYAN}{last_timestamp}{colorama.Style.RESET_ALL} {colorama.Fore.WHITE}({gap_str} ago){colorama.Style.RESET_ALL}")
+            else:
+                print(f"{colorama.Fore.GREEN}▶️  Resuming from: {colorama.Fore.CYAN}{last_timestamp}{colorama.Style.RESET_ALL} {colorama.Fore.WHITE}(live){colorama.Style.RESET_ALL}")
+        except Exception as e:
+            logging.error(f"Error parsing timestamp: {e}")
+
     try:
         # Connect to EventStreams
         headers = {'User-Agent': USER_AGENT}
@@ -225,7 +258,39 @@ def run_streaming_monitor(filter_level: str = DEFAULT_FILTER):
                     else:
                         # Show animated streaming status on same line
                         current_time = datetime.now().strftime('%H:%M:%S')
-                        print(f"\r{colorama.Fore.CYAN}{spinner} Streaming... {colorama.Fore.WHITE}[{current_time}] {colorama.Fore.YELLOW}Latest: {change.get('title', 'N/A')[:30]}{colorama.Style.RESET_ALL}", end="", flush=True)
+
+                        # Check if we're in catchup mode
+                        if is_catching_up and change.get('timestamp'):
+                            # Get event timestamp
+                            ts_value = change['timestamp']
+                            if isinstance(ts_value, int):
+                                event_dt = datetime.fromtimestamp(ts_value, tz=timezone.utc)
+                            else:
+                                event_dt = parser.isoparse(str(ts_value))
+                                if event_dt.tzinfo is None:
+                                    event_dt = event_dt.replace(tzinfo=timezone.utc)
+
+                            # Calculate progress
+                            total_gap = (catchup_end_time - catchup_start_time).total_seconds()
+                            progress = (event_dt - catchup_start_time).total_seconds()
+                            percent = min(100, int((progress / total_gap) * 100)) if total_gap > 0 else 100
+
+                            # Check if we're caught up (within 30 seconds of now)
+                            now = datetime.now(timezone.utc)
+                            lag = (now - event_dt).total_seconds()
+
+                            if lag < 30:
+                                # We've caught up!
+                                print(f"\r{' '*80}\r", end="")
+                                print(f"{colorama.Fore.GREEN}✅ Caught up! Now streaming live...{colorama.Style.RESET_ALL}")
+                                is_catching_up = False
+                            else:
+                                # Still catching up - show progress
+                                event_time_str = event_dt.strftime('%H:%M:%S')
+                                print(f"\r{colorama.Fore.YELLOW}{spinner} Catching up... {colorama.Fore.WHITE}[{event_time_str}] {colorama.Fore.CYAN}{percent}% {colorama.Fore.YELLOW}Latest: {change.get('title', 'N/A')[:20]}{colorama.Style.RESET_ALL}", end="", flush=True)
+                        else:
+                            # Normal streaming mode
+                            print(f"\r{colorama.Fore.CYAN}{spinner} Streaming... {colorama.Fore.WHITE}[{current_time}] {colorama.Fore.YELLOW}Latest: {change.get('title', 'N/A')[:30]}{colorama.Style.RESET_ALL}", end="", flush=True)
 
                     # Update timestamp - format as YYYY-MM-DDTHH:MM:SSZ
                     if change.get('timestamp'):
