@@ -64,32 +64,55 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
             try:
                 # Update timestamps for this iteration
                 current_time_utc = datetime.now(timezone.utc)
-                params = {
-                    "action": "query",
-                    "list": "recentchanges",
-                    "rcprop": "title|ids|sizes|flags|user|timestamp|comment|revid|parentid",
-                    "rcshow": "!bot",
-                    "rclimit": 500,
-                    "format": "json",
-                    "rcdir": "newer",
-                    "rcend": current_time_utc.isoformat()
-                }
 
-                if last_timestamp:
-                    params["rcstart"] = last_timestamp
+                # Fetch all changes using continuation if needed
+                all_changes = []
+                continue_token = None
+                batch_count = 0
 
-                logging.debug(f"Fetching changes from {last_timestamp or 'beginning'} to {params['rcend']}")
+                while True:
+                    params = {
+                        "action": "query",
+                        "list": "recentchanges",
+                        "rcprop": "title|ids|sizes|flags|user|timestamp|comment|revid|parentid",
+                        "rcshow": "!bot",
+                        "rclimit": 500,
+                        "format": "json",
+                        "rcdir": "newer",
+                        "rcend": current_time_utc.isoformat()
+                    }
 
-                data = fetch_recent_changes(params)
-                changes = data.get("query", {}).get("recentchanges", [])
+                    if last_timestamp:
+                        params["rcstart"] = last_timestamp
+
+                    if continue_token:
+                        params["rccontinue"] = continue_token
+
+                    logging.debug(f"Fetching batch {batch_count + 1} from {last_timestamp or 'beginning'} to {params['rcend']}")
+
+                    data = fetch_recent_changes(params)
+                    changes = data.get("query", {}).get("recentchanges", [])
+                    all_changes.extend(changes)
+                    batch_count += 1
+
+                    # Check if there are more results
+                    continue_token = data.get("continue", {}).get("rccontinue")
+
+                    if not continue_token or len(changes) < 500:
+                        # No more results or last batch was partial
+                        break
+
+                    # Log continuation
+                    logging.debug(f"Found continuation token - fetching more results (total so far: {len(all_changes)})")
 
                 # Log sample changes to file only
-                if changes:
+                if all_changes:
+                    logging.debug(f"Fetched {len(all_changes)} total changes in {batch_count} batch(es)")
                     logging.debug(f"Sample changes (showing first 3):")
-                    for i, change in enumerate(changes[:3]):
+                    for i, change in enumerate(all_changes[:3]):
                         logging.debug(f"Change {i+1}: Title={change.get('title')}, User={change.get('user')}")
 
-                government_changes = filter_government_changes(changes, ip_cache, processed_changes)
+                government_changes = filter_government_changes(all_changes, ip_cache, processed_changes)
 
                 # Update spinner for visual feedback
                 spinner = spinner_frames[spinner_idx % len(spinner_frames)]
@@ -148,17 +171,18 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
                     print(f"{colorama.Fore.GREEN}✅ Processed and posted {len(government_changes)} edit(s) | Total: {total_changes}{colorama.Style.RESET_ALL}\n")
                 else:
                     # Show animated polling status on same line
-                    if changes:
+                    if all_changes:
                         current_time = datetime.now().strftime('%H:%M:%S')
-                        print(f"\r{colorama.Fore.CYAN}{spinner} Polling... {colorama.Fore.WHITE}[{current_time}] {colorama.Fore.YELLOW}Checked {len(changes)} changes{colorama.Style.RESET_ALL}", end="", flush=True)
+                        batch_info = f" ({batch_count} batch{'es' if batch_count > 1 else ''})" if batch_count > 1 else ""
+                        print(f"\r{colorama.Fore.CYAN}{spinner} Polling... {colorama.Fore.WHITE}[{current_time}] {colorama.Fore.YELLOW}Checked {len(all_changes)} changes{batch_info}{colorama.Style.RESET_ALL}", end="", flush=True)
                     else:
                         # Show spinner even with no changes
                         current_time = datetime.now().strftime('%H:%M:%S')
                         print(f"\r{colorama.Fore.CYAN}{spinner} Polling... {colorama.Fore.WHITE}[{current_time}]{colorama.Style.RESET_ALL}", end="", flush=True)
 
                 # Always update timestamp to avoid infinite loops
-                if changes:
-                    latest_timestamp = max(change["timestamp"] for change in changes)
+                if all_changes:
+                    latest_timestamp = max(change["timestamp"] for change in all_changes)
                     last_timestamp = latest_timestamp
                     save_state(STATE_FILE, last_timestamp)
                     logging.debug(f"Updated timestamp to: {last_timestamp}")
