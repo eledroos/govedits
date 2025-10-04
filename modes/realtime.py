@@ -37,13 +37,17 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
 
     last_timestamp = load_state(STATE_FILE)
 
-    # Clean terminal display
-    print(f"\n{colorama.Fore.CYAN}{'='*60}{colorama.Style.RESET_ALL}")
-    print(f"{colorama.Fore.CYAN}📡 Wikipedia Government Edit Monitor{colorama.Style.RESET_ALL}")
-    print(f"{colorama.Fore.CYAN}{'='*60}{colorama.Style.RESET_ALL}")
-    print(f"{colorama.Fore.WHITE}Filter: {colorama.Fore.YELLOW}{filter_level}{colorama.Style.RESET_ALL}")
-    print(f"{colorama.Fore.WHITE}Loaded: {colorama.Fore.GREEN}{len(ip_cache.networks['v4'])} IPv4 + {len(ip_cache.networks['v6'])} IPv6 ranges{colorama.Style.RESET_ALL}")
-    print(f"{colorama.Fore.CYAN}{'='*60}{colorama.Style.RESET_ALL}\n")
+    # Spinner animation frames
+    spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    spinner_idx = 0
+
+    # Enhanced terminal display with box drawing
+    print(f"\n{colorama.Fore.CYAN}╔{'═'*58}╗{colorama.Style.RESET_ALL}")
+    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} {colorama.Fore.CYAN}📡 Wikipedia Government Edit Monitor{colorama.Style.RESET_ALL}{' '*22}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
+    print(f"{colorama.Fore.CYAN}╠{'═'*58}╣{colorama.Style.RESET_ALL}")
+    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} {colorama.Fore.WHITE}Filter:{colorama.Style.RESET_ALL} {colorama.Fore.YELLOW}{filter_level}{colorama.Style.RESET_ALL}{' '*(51-len(filter_level))}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
+    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} {colorama.Fore.WHITE}Ranges:{colorama.Style.RESET_ALL} {colorama.Fore.GREEN}{len(ip_cache.networks['v4'])} IPv4 + {len(ip_cache.networks['v6'])} IPv6{colorama.Style.RESET_ALL}{' '*(51-len(str(len(ip_cache.networks['v4'])))-len(str(len(ip_cache.networks['v6'])))-12)}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
+    print(f"{colorama.Fore.CYAN}╚{'═'*58}╝{colorama.Style.RESET_ALL}\n")
 
     logging.info("Starting indefinite polling for government changes...")
 
@@ -82,24 +86,40 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
                 if government_changes:
                     # Clear the polling line and show alerts
                     print(f"\r{' '*80}\r", end="")  # Clear line
-                    print(f"\n{colorama.Fore.RED}{'🚨'*20}{colorama.Style.RESET_ALL}")
-                    print(f"{colorama.Fore.RED}  GOVERNMENT EDIT DETECTED{colorama.Style.RESET_ALL}")
-                    print(f"{colorama.Fore.RED}{'🚨'*20}{colorama.Style.RESET_ALL}\n")
+                    print(f"\n{colorama.Fore.RED}╔{'═'*58}╗{colorama.Style.RESET_ALL}")
+                    print(f"{colorama.Fore.RED}║{colorama.Style.RESET_ALL} {colorama.Fore.RED}🚨 GOVERNMENT EDIT DETECTED{colorama.Style.RESET_ALL}{' '*26}{colorama.Fore.RED}║{colorama.Style.RESET_ALL}")
+                    print(f"{colorama.Fore.RED}╚{'═'*58}╝{colorama.Style.RESET_ALL}\n")
 
                     for change in government_changes:
                         _, org = ip_cache.check_ip(change.get("user"))
                         timestamp_str = convert_timestamp(change.get('timestamp'))
 
-                        print(f"{colorama.Fore.WHITE}┌─ {colorama.Fore.CYAN}{change.get('title')}{colorama.Style.RESET_ALL}")
-                        print(f"{colorama.Fore.WHITE}├─ {colorama.Fore.YELLOW}Organization: {colorama.Fore.MAGENTA}{org}{colorama.Style.RESET_ALL}")
+                        # Determine org color based on type
+                        org_lower = org.lower()
+                        if any(x in org_lower for x in ['senate', 'house of representatives', 'congress']):
+                            org_color = colorama.Fore.MAGENTA
+                        elif any(x in org_lower for x in ['department', 'white house', 'executive']):
+                            org_color = colorama.Fore.BLUE
+                        elif 'court' in org_lower:
+                            org_color = colorama.Fore.CYAN
+                        else:
+                            org_color = colorama.Fore.YELLOW
+
+                        # Create clickable link (works in modern terminals)
+                        diff_url = create_diff_url(change.get("revid"), change.get("parentid"))
+                        clickable_url = f"\033]8;;{diff_url}\033\\{diff_url}\033]8;;\033\\"
+
+                        print(f"{colorama.Fore.WHITE}╭─ {colorama.Fore.CYAN}{change.get('title')}{colorama.Style.RESET_ALL}")
+                        print(f"{colorama.Fore.WHITE}├─ {colorama.Fore.YELLOW}Organization: {org_color}{org}{colorama.Style.RESET_ALL}")
                         print(f"{colorama.Fore.WHITE}├─ {colorama.Fore.YELLOW}IP Address: {colorama.Fore.WHITE}{change.get('user')}{colorama.Style.RESET_ALL}")
                         print(f"{colorama.Fore.WHITE}├─ {colorama.Fore.YELLOW}Time: {colorama.Fore.WHITE}{timestamp_str}{colorama.Style.RESET_ALL}")
+                        print(f"{colorama.Fore.WHITE}├─ {colorama.Fore.YELLOW}Diff URL: {colorama.Fore.BLUE}{clickable_url}{colorama.Style.RESET_ALL}")
 
                         comment = change.get('comment', '')[:80]
                         if comment:
-                            print(f"{colorama.Fore.WHITE}└─ {colorama.Fore.YELLOW}Comment: {colorama.Fore.WHITE}{comment}...{colorama.Style.RESET_ALL}\n")
+                            print(f"{colorama.Fore.WHITE}╰─ {colorama.Fore.YELLOW}Comment: {colorama.Fore.WHITE}{comment}...{colorama.Style.RESET_ALL}\n")
                         else:
-                            print()
+                            print(f"{colorama.Fore.WHITE}╰{colorama.Style.RESET_ALL}\n")
 
                     logging.info("GOVERNMENT EDIT DETECTED")
                     for change in government_changes:
@@ -115,10 +135,12 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
                     total_changes += len(government_changes)
                     print(f"{colorama.Fore.GREEN}✅ Processed and posted {len(government_changes)} edit(s) | Total: {total_changes}{colorama.Style.RESET_ALL}\n")
                 else:
-                    # Show clean polling status on same line
+                    # Show animated polling status on same line
                     if changes:
                         current_time = datetime.now().strftime('%H:%M:%S')
-                        print(f"\r{colorama.Fore.CYAN}⏳ Polling... {colorama.Fore.WHITE}[{current_time}] {colorama.Fore.YELLOW}Checked {len(changes)} changes{colorama.Style.RESET_ALL}", end="", flush=True)
+                        spinner = spinner_frames[spinner_idx % len(spinner_frames)]
+                        spinner_idx += 1
+                        print(f"\r{colorama.Fore.CYAN}{spinner} Polling... {colorama.Fore.WHITE}[{current_time}] {colorama.Fore.YELLOW}Checked {len(changes)} changes{colorama.Style.RESET_ALL}", end="", flush=True)
 
                 # Always update timestamp to avoid infinite loops
                 if changes:
@@ -133,11 +155,13 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
             time.sleep(REALTIME_POLL_INTERVAL)
 
     except KeyboardInterrupt:
-        print(f"\n\n{colorama.Fore.YELLOW}⏸️  Shutting down gracefully...{colorama.Style.RESET_ALL}")
+        print(f"\n\n{colorama.Fore.YELLOW}╔{'═'*58}╗{colorama.Style.RESET_ALL}")
+        print(f"{colorama.Fore.YELLOW}║{colorama.Style.RESET_ALL} {colorama.Fore.YELLOW}⏸️  Shutting down gracefully...{colorama.Style.RESET_ALL}{' '*26}{colorama.Fore.YELLOW}║{colorama.Style.RESET_ALL}")
+        print(f"{colorama.Fore.YELLOW}╚{'═'*58}╝{colorama.Style.RESET_ALL}")
         shutdown_timestamp = datetime.now(timezone.utc).isoformat()
         save_state(STATE_FILE, shutdown_timestamp)
-        print(f"{colorama.Fore.GREEN}✅ Final total: {total_changes} government edits detected{colorama.Style.RESET_ALL}")
-        print(f"{colorama.Fore.CYAN}{'='*60}{colorama.Style.RESET_ALL}\n")
+        print(f"\n{colorama.Fore.GREEN}✅ Final total: {total_changes} government edits detected{colorama.Style.RESET_ALL}")
+        print(f"{colorama.Fore.CYAN}╚{'═'*58}╝{colorama.Style.RESET_ALL}\n")
         logging.info(f"Shutting down... Recorded shutdown timestamp: {shutdown_timestamp}")
         logging.info(f"Final total of government changes logged: {total_changes}")
 
