@@ -57,7 +57,7 @@ WIKIPEDIA_API_URL = "https://en.wikipedia.org/w/api.php"
 WIKIPEDIA_DIFF_BASE_URL = "https://en.wikipedia.org/w/index.php"
 
 # Enable or disable posting to Bluesky
-ENABLE_BLUESKY_POSTING = False
+ENABLE_BLUESKY_POSTING = True
 
 # Filter for federal agencies only (True = federal only, False = all government)
 FEDERAL_ONLY = True
