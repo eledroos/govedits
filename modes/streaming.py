@@ -155,22 +155,24 @@ def run_streaming_monitor(filter_level: str = DEFAULT_FILTER):
         except Exception as e:
             logging.error(f"Error parsing timestamp: {e}")
 
-    try:
-        # Connect to EventStreams
-        headers = {'User-Agent': USER_AGENT}
-        response = requests.get(STREAM_URL, stream=True, headers=headers, timeout=None)
-        response.raise_for_status()
+    # Auto-reconnect loop
+    while True:
+        try:
+            # Connect to EventStreams
+            headers = {'User-Agent': USER_AGENT}
+            response = requests.get(STREAM_URL, stream=True, headers=headers, timeout=None)
+            response.raise_for_status()
 
-        client = sseclient.SSEClient(response)
+            client = sseclient.SSEClient(response)
 
-        logging.info("Connected to EventStreams - monitoring for government edits...")
-        print(f"{colorama.Fore.GREEN}✅ Connected to EventStreams{colorama.Style.RESET_ALL}\n")
+            logging.info("Connected to EventStreams - monitoring for government edits...")
+            print(f"{colorama.Fore.GREEN}✅ Connected to EventStreams{colorama.Style.RESET_ALL}\n")
 
-        for event in client.events():
-            try:
-                # Parse event data
-                if event.data:
-                    data = json.loads(event.data)
+            for event in client.events():
+                try:
+                    # Parse event data
+                    if event.data:
+                        data = json.loads(event.data)
 
                     # Filter for English Wikipedia edits only
                     if data.get('wiki') != 'enwiki':
@@ -305,37 +307,34 @@ def run_streaming_monitor(filter_level: str = DEFAULT_FILTER):
                         last_timestamp = format_timestamp(ts)
                         save_state(STATE_FILE, last_timestamp)
 
-            except json.JSONDecodeError as e:
-                logging.debug(f"Failed to parse event data: {e}")
-                continue
-            except Exception as e:
-                logging.error(f"Error processing event: {e}", exc_info=True)
-                continue
+                except json.JSONDecodeError as e:
+                    logging.debug(f"Failed to parse event data: {e}")
+                    continue
+                except Exception as e:
+                    logging.error(f"Error processing event: {e}", exc_info=True)
+                    continue
 
-    except requests.exceptions.ConnectionError as e:
-        logging.error(f"Connection error: {e}")
-        print(f"\n{colorama.Fore.RED}❌ Connection to EventStreams failed{colorama.Style.RESET_ALL}")
-        print(f"{colorama.Fore.YELLOW}Please check your internet connection and try again.{colorama.Style.RESET_ALL}\n")
-    except requests.exceptions.Timeout as e:
-        logging.error(f"Connection timeout: {e}")
-        print(f"\n{colorama.Fore.RED}❌ Connection timed out{colorama.Style.RESET_ALL}\n")
-    except Exception as e:
-        logging.error(f"Streaming error: {e}", exc_info=True)
-        print(f"\n{colorama.Fore.RED}❌ Streaming error occurred: {e}{colorama.Style.RESET_ALL}\n")
-    except KeyboardInterrupt:
-        print(f"\n\n{colorama.Fore.YELLOW}╔{'═'*58}╗{colorama.Style.RESET_ALL}")
-        print(f"{colorama.Fore.YELLOW}║{colorama.Style.RESET_ALL} {colorama.Fore.YELLOW}⏸️  Shutting down gracefully...{colorama.Style.RESET_ALL}{' '*26}{colorama.Fore.YELLOW}║{colorama.Style.RESET_ALL}")
-        print(f"{colorama.Fore.YELLOW}╚{'═'*58}╝{colorama.Style.RESET_ALL}")
-        shutdown_timestamp = format_timestamp(datetime.now(timezone.utc))
-        save_state(STATE_FILE, shutdown_timestamp)
-        print(f"\n{colorama.Fore.GREEN}✅ Final total: {total_changes} government edits detected{colorama.Style.RESET_ALL}")
-        print(f"{colorama.Fore.CYAN}╚{'═'*58}╝{colorama.Style.RESET_ALL}\n")
-        logging.info(f"Shutting down... Recorded shutdown timestamp: {shutdown_timestamp}")
-        logging.info(f"Final total of government changes logged: {total_changes}")
-    finally:
-        # Save final state
-        if last_timestamp:
-            save_state(STATE_FILE, last_timestamp)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.ChunkedEncodingError) as e:
+            # Connection dropped - reconnect automatically
+            logging.warning(f"Connection lost: {e}. Reconnecting in 5 seconds...")
+            print(f"\n{colorama.Fore.YELLOW}⚠️  Connection lost. Reconnecting in 5 seconds...{colorama.Style.RESET_ALL}")
+            import time
+            time.sleep(5)
+            continue  # Retry the while True loop
+
+        except KeyboardInterrupt:
+            print(f"\n\n{colorama.Fore.YELLOW}╔{'═'*58}╗{colorama.Style.RESET_ALL}")
+            print(f"{colorama.Fore.YELLOW}║{colorama.Style.RESET_ALL} {colorama.Fore.YELLOW}⏸️  Shutting down gracefully...{colorama.Style.RESET_ALL}{' '*26}{colorama.Fore.YELLOW}║{colorama.Style.RESET_ALL}")
+            print(f"{colorama.Fore.YELLOW}╚{'═'*58}╝{colorama.Style.RESET_ALL}")
+            shutdown_timestamp = format_timestamp(datetime.now(timezone.utc))
+            save_state(STATE_FILE, shutdown_timestamp)
+            print(f"\n{colorama.Fore.GREEN}✅ Final total: {total_changes} government edits detected{colorama.Style.RESET_ALL}")
+            print(f"{colorama.Fore.CYAN}╚{'═'*58}╝{colorama.Style.RESET_ALL}\n")
+            logging.info(f"Shutting down... Recorded shutdown timestamp: {shutdown_timestamp}")
+            logging.info(f"Final total of government changes logged: {total_changes}")
+            break  # Exit the while loop
 
 
 def save_and_post_changes(changes, ip_cache):
