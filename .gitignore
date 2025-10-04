@@ -160,7 +160,17 @@ cython_debug/
 #.idea/
 *.png
 .DS_Store
-*.csv
 *.zip
-*.json
 *.csv#
+
+# Data directory - generated files
+data/outputs/*.csv
+data/logs/*.log
+data/state/*.json
+data/screenshots/
+
+# Config with credentials (keep template only)
+config.json
+
+# Legacy directory (archived)
+gov/
