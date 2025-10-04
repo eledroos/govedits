@@ -85,13 +85,62 @@ class IPNetworkCache:
                             logging.warning(f"Skipping row with missing data: {row}")
                             continue
 
-                        # Check if it's U.S. Congress (not state legislatures)
+                        # Check if it's U.S. federal government (Congress, White House, Supreme Court, Executive agencies)
                         org_lower = org.lower()
                         is_congress = (
+                            # Legislative Branch
                             'u.s. senate' in org_lower or
+                            'united states senate' in org_lower or
                             'u.s. house of representatives' in org_lower or
-                            org_lower == 'senate' or  # Just "Senate" without state prefix
-                            org_lower == 'house of representatives'  # Just "House of Representatives" without state prefix
+                            'united states congress' in org_lower or
+                            'congressional budget office' in org_lower or
+                            'united states capitol police' in org_lower or
+                            org_lower == 'senate' or
+                            org_lower == 'house of representatives' or
+                            # Executive Branch - White House
+                            'white house' in org_lower or
+                            'executive office of the president' in org_lower or
+                            # Judicial Branch
+                            'supreme court' in org_lower and 'u.s.' in org_lower or  # Exclude state supreme courts
+                            'u.s. district court' in org_lower or
+                            'united states district court' in org_lower or
+                            'u.s. probation' in org_lower or
+                            # Major Executive Departments (Cabinet-level)
+                            'department of state' in org_lower or
+                            'department of defense' in org_lower or
+                            'department of justice' in org_lower or
+                            'department of the treasury' in org_lower or
+                            'department of homeland security' in org_lower or
+                            'department of agriculture' in org_lower or
+                            'department of commerce' in org_lower or
+                            'department of labor' in org_lower or
+                            'department of education' in org_lower or
+                            'department of energy' in org_lower or
+                            'department of health and human services' in org_lower or
+                            'department of housing and urban development' in org_lower or
+                            'department of the interior' in org_lower or
+                            'department of transportation' in org_lower or
+                            'department of veterans affairs' in org_lower or
+                            # Major Federal Agencies
+                            'federal bureau of investigation' in org_lower or
+                            'fbi' in org_lower or
+                            'federal aviation administration' in org_lower or
+                            'federal communications commission' in org_lower or
+                            'federal election commission' in org_lower or
+                            'federal emergency management agency' in org_lower or
+                            'federal energy regulatory commission' in org_lower or
+                            'federal highway administration' in org_lower or
+                            'federal trade commission' in org_lower or
+                            'federal reserve' in org_lower or
+                            'federal retirement thrift investment board' in org_lower or
+                            'food and drug administration' in org_lower or
+                            'united states postal service' in org_lower or
+                            'united states mint' in org_lower or
+                            'united states patent and trademark office' in org_lower or
+                            'nuclear regulatory commission' in org_lower or
+                            'united states air force' in org_lower or
+                            'united states coast guard' in org_lower or
+                            'department of the air force' in org_lower
                         )
 
                         # Apply filter
