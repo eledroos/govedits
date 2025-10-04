@@ -91,6 +91,10 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
 
                 government_changes = filter_government_changes(changes, ip_cache, processed_changes)
 
+                # Update spinner for visual feedback
+                spinner = spinner_frames[spinner_idx % len(spinner_frames)]
+                spinner_idx += 1
+
                 if government_changes:
                     # Clear the polling line and show alerts
                     print(f"\r{' '*80}\r", end="")  # Clear line
@@ -146,9 +150,11 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
                     # Show animated polling status on same line
                     if changes:
                         current_time = datetime.now().strftime('%H:%M:%S')
-                        spinner = spinner_frames[spinner_idx % len(spinner_frames)]
-                        spinner_idx += 1
                         print(f"\r{colorama.Fore.CYAN}{spinner} Polling... {colorama.Fore.WHITE}[{current_time}] {colorama.Fore.YELLOW}Checked {len(changes)} changes{colorama.Style.RESET_ALL}", end="", flush=True)
+                    else:
+                        # Show spinner even with no changes
+                        current_time = datetime.now().strftime('%H:%M:%S')
+                        print(f"\r{colorama.Fore.CYAN}{spinner} Polling... {colorama.Fore.WHITE}[{current_time}]{colorama.Style.RESET_ALL}", end="", flush=True)
 
                 # Always update timestamp to avoid infinite loops
                 if changes:
