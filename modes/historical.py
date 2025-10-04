@@ -210,9 +210,9 @@ class HistoricalProcessor:
                 "posted": False
             })
 
-        # Update processed IDs and timestamp
+        # Note: processed_rcids will be updated in process_queue() after successful processing
+        # Update timestamp only (not processed_rcids yet)
         if gov_edits:
-            self.state["processed_rcids"].update(str(e.get('rcid', '')) for e in gov_edits)
             timestamps = [parser.isoparse(e['timestamp']) for e in gov_edits]
             self.state["last_timestamp"] = max(timestamps).isoformat()
 
@@ -221,7 +221,6 @@ class HistoricalProcessor:
         total_processed = 0
         while self.queue:
             item = self.queue.popleft()
-            total_processed += 1
 
             try:
                 # Take screenshot
@@ -252,6 +251,13 @@ class HistoricalProcessor:
                     item["posted"] = True
                     time.sleep(BLUESKY_DELAY)
 
+                # Mark as processed ONLY after successful completion
+                rcid = str(item["data"].get("rcid", ""))
+                if rcid:
+                    self.state["processed_rcids"].add(rcid)
+
+                total_processed += 1
+
             except Exception as e:
                 logging.error(f"Queue item failed: {e}")
                 self.queue.appendleft(item)
@@ -265,7 +271,7 @@ class HistoricalProcessor:
                 )
 
             # Update state periodically
-            if len(self.queue) % 10 == 0:
+            if total_processed % 10 == 0:
                 self.save_state()
 
     def log_government_edits(self, gov_edits: List[Dict]):
