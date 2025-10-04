@@ -85,8 +85,14 @@ class IPNetworkCache:
                             logging.warning(f"Skipping row with missing data: {row}")
                             continue
 
-                        # Check if it's Congress (House or Senate)
-                        is_congress = 'senate' in org.lower() or 'house of representatives' in org.lower()
+                        # Check if it's U.S. Congress (not state legislatures)
+                        org_lower = org.lower()
+                        is_congress = (
+                            'u.s. senate' in org_lower or
+                            'u.s. house of representatives' in org_lower or
+                            org_lower == 'senate' or  # Just "Senate" without state prefix
+                            org_lower == 'house of representatives'  # Just "House of Representatives" without state prefix
+                        )
 
                         # Apply filter
                         if self.filter_level == FILTER_CONGRESS and not is_congress:
