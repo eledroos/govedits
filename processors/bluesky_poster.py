@@ -7,6 +7,7 @@ import os
 import time
 from typing import Dict, List
 import piexif
+import pytz
 from dateutil import parser
 from atproto import Client, models
 from processors.screenshot import create_diff_url
@@ -114,10 +115,13 @@ def post_to_bluesky(changes: List[Dict], bluesky_credentials_file: str = CONFIG_
             )
             screenshot_path = change.get("screenshot_path")
 
-            # Format timestamp for display
+            # Format timestamp for display (convert to US Eastern Time)
             timestamp = change.get("change_data", {}).get("timestamp")
             if timestamp:
-                edit_date = parser.isoparse(timestamp).strftime('%b %d, %Y at %-I:%M %p UTC')
+                utc_time = parser.isoparse(timestamp)
+                eastern = pytz.timezone('America/New_York')
+                local_time = utc_time.astimezone(eastern)
+                edit_date = local_time.strftime('%b %d, %Y at %-I:%M %p %Z')
                 text = f"{title} Wikipedia article edited anonymously from {org} on {edit_date}.\n\n{diff_url}"
             else:
                 text = f"{title} Wikipedia article edited anonymously from {org}.\n\n{diff_url}"
