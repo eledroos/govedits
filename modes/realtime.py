@@ -42,11 +42,19 @@ def run_realtime_monitor(filter_level: str = DEFAULT_FILTER):
     spinner_idx = 0
 
     # Enhanced terminal display with box drawing
+    # Note: emoji 📡 takes 2 character widths, so adjust spacing accordingly
     print(f"\n{colorama.Fore.CYAN}╔{'═'*58}╗{colorama.Style.RESET_ALL}")
-    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} {colorama.Fore.CYAN}📡 Wikipedia Government Edit Monitor{colorama.Style.RESET_ALL}{' '*22}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
+    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} 📡 Wikipedia Government Edit Monitor{' '*21}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
     print(f"{colorama.Fore.CYAN}╠{'═'*58}╣{colorama.Style.RESET_ALL}")
-    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} {colorama.Fore.WHITE}Filter:{colorama.Style.RESET_ALL} {colorama.Fore.YELLOW}{filter_level}{colorama.Style.RESET_ALL}{' '*(51-len(filter_level))}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
-    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} {colorama.Fore.WHITE}Ranges:{colorama.Style.RESET_ALL} {colorama.Fore.GREEN}{len(ip_cache.networks['v4'])} IPv4 + {len(ip_cache.networks['v6'])} IPv6{colorama.Style.RESET_ALL}{' '*(51-len(str(len(ip_cache.networks['v4'])))-len(str(len(ip_cache.networks['v6'])))-12)}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
+
+    filter_text = f"Filter: {filter_level}"
+    filter_padding = 58 - len(filter_text) - 1
+    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} {colorama.Fore.WHITE}{filter_text}{colorama.Style.RESET_ALL}{' '*filter_padding}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
+
+    ranges_text = f"Ranges: {len(ip_cache.networks['v4'])} IPv4 + {len(ip_cache.networks['v6'])} IPv6"
+    ranges_padding = 58 - len(ranges_text) - 1
+    print(f"{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL} {colorama.Fore.WHITE}{ranges_text}{colorama.Style.RESET_ALL}{' '*ranges_padding}{colorama.Fore.CYAN}║{colorama.Style.RESET_ALL}")
+
     print(f"{colorama.Fore.CYAN}╚{'═'*58}╝{colorama.Style.RESET_ALL}\n")
 
     logging.info("Starting indefinite polling for government changes...")
