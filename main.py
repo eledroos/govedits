@@ -16,13 +16,19 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Real-time monitoring with federal filter (default)
+  # EventStreams monitoring (recommended - guaranteed delivery)
+  python main.py stream
+
+  # EventStreams monitoring with Congress only
+  python main.py stream --filter congress
+
+  # Real-time polling with federal filter (default)
   python main.py monitor
 
-  # Real-time monitoring with all government agencies
+  # Real-time polling with all government agencies
   python main.py monitor --filter all
 
-  # Real-time monitoring with Congress only
+  # Real-time polling with Congress only
   python main.py monitor --filter congress
 
   # Historical scan of last 30 days (default) with federal filter
@@ -43,11 +49,24 @@ Filter Options:
 
     subparsers = parser.add_subparsers(dest='mode', help='Operating mode', required=True)
 
-    # Monitor (real-time) mode
+    # Stream (EventStreams) mode
+    stream_parser = subparsers.add_parser(
+        'stream',
+        help='EventStreams monitoring mode (recommended)',
+        description='Monitor Wikipedia via EventStreams API with guaranteed delivery and automatic crash recovery'
+    )
+    stream_parser.add_argument(
+        '--filter',
+        choices=[FILTER_ALL, FILTER_FEDERAL, FILTER_CONGRESS],
+        default=DEFAULT_FILTER,
+        help=f'Government filter level (default: {DEFAULT_FILTER})'
+    )
+
+    # Monitor (real-time polling) mode
     monitor_parser = subparsers.add_parser(
         'monitor',
-        help='Real-time monitoring mode',
-        description='Continuously monitor Wikipedia for government edits'
+        help='Real-time polling mode',
+        description='Continuously monitor Wikipedia for government edits via API polling'
     )
     monitor_parser.add_argument(
         '--filter',
@@ -93,7 +112,10 @@ Filter Options:
     print(f"{'='*60}\n")
 
     # Run appropriate mode
-    if args.mode == 'monitor':
+    if args.mode == 'stream':
+        from modes.streaming import run_streaming_monitor
+        run_streaming_monitor(filter_level=args.filter)
+    elif args.mode == 'monitor':
         from modes.realtime import run_realtime_monitor
         run_realtime_monitor(filter_level=args.filter)
     elif args.mode == 'historical':
