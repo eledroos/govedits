@@ -7,6 +7,7 @@ import os
 import time
 from typing import Dict, List
 import piexif
+from dateutil import parser
 from atproto import Client, models
 from processors.screenshot import create_diff_url
 from config.settings import CONFIG_FILE, ENABLE_BLUESKY_POSTING, BLUESKY_DELAY
@@ -112,7 +113,14 @@ def post_to_bluesky(changes: List[Dict], bluesky_credentials_file: str = CONFIG_
                 change.get("change_data", {}).get("parentid")
             )
             screenshot_path = change.get("screenshot_path")
-            text = f"{title} Wikipedia article edited anonymously from {org}.\n\n{diff_url}"
+
+            # Format timestamp for display
+            timestamp = change.get("change_data", {}).get("timestamp")
+            if timestamp:
+                edit_date = parser.isoparse(timestamp).strftime('%b %d, %Y at %-I:%M %p UTC')
+                text = f"{title} Wikipedia article edited anonymously from {org} on {edit_date}.\n\n{diff_url}"
+            else:
+                text = f"{title} Wikipedia article edited anonymously from {org}.\n\n{diff_url}"
 
             facets = create_facets_for_url(text, diff_url)
 
