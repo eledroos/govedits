@@ -125,11 +125,16 @@ class HistoricalProcessor:
             "rclimit": 500,
             "format": "json",
             "rcdir": "newer",
-            "rcstart": (parser.isoparse(self.state["last_timestamp"])
-                    if self.state["last_timestamp"]
-                    else datetime.now(timezone.utc) - timedelta(days=self.days_to_fetch)).isoformat(),
             "rcend": datetime.now(timezone.utc).isoformat(),
         }
+
+        # Use continuation token if available, otherwise use timestamp
+        if self.state["continue_token"]:
+            params["rccontinue"] = self.state["continue_token"]
+        else:
+            params["rcstart"] = (parser.isoparse(self.state["last_timestamp"])
+                    if self.state["last_timestamp"]
+                    else datetime.now(timezone.utc) - timedelta(days=self.days_to_fetch)).isoformat()
 
         headers = {
             'User-Agent': 'GovEditsBot/1.0 (Wikipedia government edit monitor; educational/transparency project)'
@@ -148,13 +153,8 @@ class HistoricalProcessor:
             changes = data.get("query", {}).get("recentchanges", [])
             continue_token = data.get("continue", {}).get("rccontinue")
 
-            # Save state immediately after successful fetch
             if changes:
                 logging.info(f"🌐 Fetched {len(changes)} changes")
-                new_timestamp = max(parser.isoparse(c['timestamp']) for c in changes)
-                self.state["last_timestamp"] = new_timestamp.isoformat()
-                self.state["continue_token"] = continue_token
-                self.save_state()
 
             return changes, continue_token
 
@@ -211,9 +211,9 @@ class HistoricalProcessor:
             })
 
         # Note: processed_rcids will be updated in process_queue() after successful processing
-        # Update timestamp only (not processed_rcids yet)
-        if gov_edits:
-            timestamps = [parser.isoparse(e['timestamp']) for e in gov_edits]
+        # Update timestamp based on ALL changes in batch (not just government edits)
+        if changes:
+            timestamps = [parser.isoparse(c['timestamp']) for c in changes]
             self.state["last_timestamp"] = max(timestamps).isoformat()
 
     def process_queue(self):
