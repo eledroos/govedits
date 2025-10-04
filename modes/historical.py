@@ -235,11 +235,20 @@ class HistoricalProcessor:
                         item["data"]["timestamp"]
                     )
 
+                # Mark as processed FIRST to prevent duplicates on crash
+                rcid = str(item["data"].get("rcid", ""))
+                if rcid:
+                    self.state["processed_rcids"].add(rcid)
+                item["posted"] = True
+
+                # Save state immediately to prevent reprocessing
+                self.save_state()
+
                 # Save to CSV
                 save_to_csv([item["data"]], self.ip_cache, OUTPUT_CSV, SENSITIVE_CSV, item["screenshot"])
 
-                # Post to Bluesky
-                if not item["posted"] and self.bluesky_client:
+                # Post to Bluesky (safe to fail now - won't retry)
+                if self.bluesky_client:
                     _, org = self.ip_cache.check_ip(item["data"].get("user"))
                     formatted_change = {
                         "title": item["data"].get("title"),
@@ -248,13 +257,7 @@ class HistoricalProcessor:
                         "change_data": item["data"]
                     }
                     post_to_bluesky([formatted_change])
-                    item["posted"] = True
                     time.sleep(BLUESKY_DELAY)
-
-                # Mark as processed ONLY after successful completion
-                rcid = str(item["data"].get("rcid", ""))
-                if rcid:
-                    self.state["processed_rcids"].add(rcid)
 
                 total_processed += 1
 
