@@ -54,8 +54,9 @@ def setup_logging(log_file: str = "wikipedia_monitor.log"):
     file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
-    # Console handler (colored)
+    # Console handler (colored) - only show warnings/errors
     console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.WARNING)
     console_handler.setFormatter(ColoredFormatter(
         '%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
